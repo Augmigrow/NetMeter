@@ -260,8 +260,9 @@ function toggleWidget() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromDataURL('data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="3" fill="#167cf0"/><path d="M4 8h2l1.2-3L9.3 11l1.2-3H12" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'));
-  tray = new Tray(icon);
+  const iconPath = resolve(root, 'assets', 'tray', 'netmeter.ico');
+  if (nativeImage.createFromPath(iconPath).isEmpty()) throw new Error('NetMeter tray icon could not be loaded');
+  tray = new Tray(iconPath);
   tray.setToolTip('NetMeter');
   refreshTrayMenu();
   tray.on('click', toggleWidget);

@@ -36,12 +36,13 @@
 - 语言存放在独立的本地存储键 `netmeter-language`，不写进 `netmeter-controller-v2` 设置对象，因此保存设置不会覆盖语言。设置窗口切换语言后立即 `setLanguage()` 重绘当前窗口并 `saveLanguage()` 落盘；悬浮方格通过 `storage` 事件（`event.key === LANGUAGE_KEY`）跟随切换，`setLanguage()` 会重绘方格、已打开的历史面板和连接状态。切换语言不触发 `markSettingsDirty`，所以不会把设置标成未保存。
 - 下拉框的取值（「7 天」「30 天」「长期」「最近 2/5/10 分钟」）是本地存储用的稳定键，两种语言完全一致；`SELECT_OPTION_KEYS` 只映射「取值 → 文案键」，`applyStaticTranslations()` 按当前语言重写 option 的可见文本，取值本身不变。因此历史数据、统计窗口和已保存设置在两种语言下完全兼容。
 - 英文文案更宽，`body.lang-en .stat` 把统计行标签列从 30px 放宽到 37px、数值列收窄到 59px，方格总尺寸仍是 180×148；探针用 `Range` 量出标签文字右边缘与数值列左边缘的间距，要求中英文都 ≥3px，避免英文 “Total” 贴住方向箭头。
+- 托盘：`assets/tray/netmeter.ico`（16/20/24/32/40/48/64px），绿下载/蓝上传、深底浅轮廓。旧 SVG 原生解码为空，改 ICO 并检查非空；窗口/开始菜单图标不变。`scripts/generate-tray-icons.cjs` 从 SVG 重建 ICO/PNG 与浅深背景预览，详见 README。
 - Electron 主进程也做了本地化：`main.mjs` 的 `UI_STRINGS` 提供托盘菜单和设置窗口标题的中英文案，`ipcMain.on('app:language')` 收到渲染进程的 `setLanguage` 后重建托盘菜单并更新窗口标题；`preload.cjs` 暴露 `setLanguage`。
 - `scripts/screenshot-probe.cjs` 用离屏 Electron 渲染中英文两版界面并写出 `docs/screenshots/` 下的 8 张效果图（方格、历史流量柱状图、历史均速曲线、设置页，中英各一套），README 双语版引用这些图；`--recent-speed` 可生成 90 分钟合成历史到 `scripts/`，用于核验短时曲线全宽显示并更新中英文均速效果图。设置页截图按内容高度加高，让「界面语言」下拉框出现在同一张图里；方格截图用 384×162、历史截图用真实的 380×306。
 
 ## 验证
 
-- 2026-11-06 复核：`npm test` 50/50 通过，覆盖密钥不泄漏到状态响应、启用/禁用配置、对齐落位、窗口化均速与峰值、历史均速、历史标签记忆和双语字典；`index.html` 内嵌脚本及 Electron 脚本语法检查通过。正式 Electron 实例已重启并在 4174 监听，`/api/status` 返回已启用且已配置；实机设置页已确认旧网址迁移为可勾选编辑条目，原选择未改动；设置页保持打开供用户操作；桌面控制与实例租约已释放。
+- 2026-11-06 复核：`npm test` 54/54 通过，覆盖密钥不泄漏到状态响应、启用/禁用配置、对齐落位、窗口化均速与峰值、历史均速、历史标签记忆和双语字典；`index.html` 内嵌脚本及 Electron 脚本语法检查通过。正式 Electron 实例已重启并在 4174 监听，`/api/status` 返回已启用且已配置；托盘新 ICO 已随正式实例启动，服务与方格窗口正常；桌面控制报 native pipe 不存在，重试/重置无效，未目视验收真实任务栏；已检查浅深背景预览和 17/17 原生托盘测试。控制连接与实例租约已释放。
 - `layout.test.mjs` 从 `index.html` 直接取出 `nearestAlignment` 与 `settleMeterPosition` 两个纯函数做单元测试：8px 阈值、落点保持指针位置、邻近方格不得改写坐标、拖动中位置不受对齐影响。
 - `average.test.mjs`（10 项）取出 `windowRates`、`trimRateSamples`、`averageWindowMs` 做纯函数测试：均速与峰值共用窗口裁剪及边界、下载/上传各自独立分母、空闲秒排除、`elapsed` 加权、空窗返回 `null`、峰值取单次采样最大值且滑出窗口即过期、样本裁剪、2/5/10 分钟映射与默认 5 分钟，并断言会话级累计字段已移除。
 - `scripts/average-probe.cjs` 用离屏 Electron 真实窗口 + 合成控制器（下载恒定 100B/s、上传恒为 0）验证 10 项：设置页三档下拉与默认值、保存写入 `localStorage`、重载恢复、悬浮窗读到 2 分钟窗口、只有下载有流量时 `100B/s` 且上传显示「—」、停流后均速不衰减（实测 97.3B/s）、切换峰值显示窗口内峰值、把渲染器时钟快进 3 分钟后峰值与均速都回落为「—」、无脚本错误。运行需 `env -u ELECTRON_RUN_AS_NODE node_modules/electron/dist/electron.exe scripts/average-probe.cjs`；本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`，不取消会让 Electron 退化成普通 Node，且 `.mjs` 探针在当前 Electron 45 里无法解析 `electron` 具名导出，故用 `.cjs`。
@@ -55,6 +56,7 @@
 - 仓库已初始化为 Git 仓库并推送到 `https://github.com/Augmigrow/NetMeter.git`（私有仓库，默认分支 `main`）。GitHub 需要走系统代理 `http://127.0.0.1:7897`，直连超时；代理配置写在仓库本地 `.git/config` 的 `http.proxy`/`https.proxy`。凭据用 Windows 凭据管理器的 GitHub oauth token，Git Credential Manager 会自动提供，不要把 token 写进文件或命令行。本仓库作者身份按兄弟仓库统一为 `Augmigrow <3123196845@qq.com>`，只在仓库本地配置。
 - `scripts/start-app.ps1` 负责重启应用：先杀掉旧的 NetMeter electron 进程，再用 `node_modules/electron/dist/electron.exe .` 启动并轮询 `http://127.0.0.1:4174/api/status` 直到就绪。Windows 下 Electron 是 GUI 子系统进程，必须先 `Remove-Item Env:ELECTRON_RUN_AS_NODE`（本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`）。`scripts/run-probe.ps1` 是通用探针启动器。
 - `scripts/drag-probe.cjs` 现有 15 项场景（含逐帧采样、远距离、不松手、整窗拖动、副屏坐标、先鼠标后 Ctrl 切换），全部通过。
+- `tray-icon.test.mjs` 4 项覆盖 PNG/ICO 格式、尺寸和入口；`scripts/tray-icon-probe.cjs` 17/17 验证像素、原生解码、Shell 注册和临时图标清理。
 - `domain-entries.test.mjs` 7 项验证迁移、显示筛选、隐藏持续采集与累计保留；独立配置的 `scripts/domain-entries-probe.cjs` 20/20 验证增删编辑、保存取消、重载记忆、全不选、中英文控件、560/440px 无溢出，并更新中英文设置页截图。
 - `history-speed.test.mjs`（13 项）测试分钟曲线、方向独立活跃秒、空闲秒排除、2/5/10 分钟窗口、跨分钟双向突发与方格 `windowRates` 定量一致、旧记录缺秒不臆造 60 秒且按方向断开、同分钟新数据合并仍保留旧记录未知秒数；另测历史标签记忆和回退、首尾裁剪后全宽映射、内部断档、单点与空集。
 - `i18n.test.mjs`（12 项）直接从 `index.html` 取出 `I18N` 字典做纯函数测试：中英键集合完全一致、没有空文案、英文文案不含中文、占位符两边一致、`t()` 能替换占位符并在缺键时回退到中文、标记里的 `data-i18n*` 钩子和 JS 里的 `t('key')` 引用都指向存在的键、语言下拉框存在且语言不写进设置对象、`setLanguage` 会重绘方格与历史面板、悬浮方格通过 `storage` 事件跟随、主进程托盘菜单与窗口标题已本地化。
