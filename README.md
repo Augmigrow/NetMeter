@@ -37,6 +37,12 @@ NetMeter is a compact always-on-top traffic tile for Windows. The interface ship
 |---|---|
 | ![窗口图标 / Chinese window icon](docs/screenshots/window-icon-zh.png) | ![窗口图标 / English window icon](docs/screenshots/window-icon-en.png) |
 
+系统拒绝自动固定时的实际引导 / Native guide when automatic pinning is unavailable
+
+| 中文 | English |
+|---|---|
+| ![固定引导 / Chinese pinning guide](docs/screenshots/start-menu-guide-zh.png) | ![固定引导 / English pinning guide](docs/screenshots/start-menu-guide-en.png) |
+
 ---
 
 # 中文
@@ -58,7 +64,9 @@ npm start
 
 Windows 托盘使用绿色下载、蓝色上传双箭头图标；`assets/tray/netmeter.ico` 含 16–64px 七档尺寸，避免原 SVG 被原生接口解码为空图。单击和右键菜单保持不变。
 
-设置窗口标题栏、悬浮方格窗口和托盘统一使用同一份双箭头 ICO；应用在创建窗口前先更新用户数据目录中的旧图标。开始菜单里的 `NetMeter` 快捷方式由 `scripts/install-start-menu.ps1` 生成，并复制同一份 ICO，不再绘制旧波形；托盘菜单“固定到开始菜单”可重新生成，快捷方式缺失时应用启动也会自动补齐。
+设置窗口标题栏、悬浮方格窗口和托盘统一使用同一份双箭头 ICO；应用在创建窗口前先更新用户数据目录中的旧图标。开始菜单里的 `NetMeter` 快捷方式由 `scripts/install-start-menu.ps1` 生成，并复制同一份 ICO，不再绘制旧波形，缺失时应用启动会自动补齐。
+
+**创建快捷方式不等于固定。** 托盘或方格右键菜单选择“固定到开始菜单…”后，应用会准备快捷方式并请求系统固定，只有确认系统已固定才显示成功。若 Windows 拒绝自动固定，会明确提示尚未固定：点击“打开快捷方式位置”，右键选中的 `NetMeter` → “固定到开始”或“固定到开始屏幕”（必要时先选“显示更多选项”）。取消不会打开资源管理器，启动不会自动固定。
 
 方格的统计行默认显示均速；点击“均速”可切换为“峰值”，每个方格独立切换。均速与峰值共用设置页选定的统计窗口（最近 2 / 5 / 10 分钟，默认 5 分钟）：均速是窗口内该方向的字节增量 ÷ 该方向有流量的秒数，下载与上传各自独立、空闲秒不计入分母；峰值取窗口内该方向有流量的最高单次采样速度，样本滑出窗口后自动回落，窗口内无流量时两者都显示“—”。点击方格顶部的域名可查看该域名的历史流量，历史视图直接在方格窗口内展开，使用与方格一致的整窗实色背景，不使用内层弹窗或滚动区域。历史面板带两个标签：「历史流量」是最近 24 小时的柱状图，「历史均速」是同窗口的曲线图，纵轴是同一统计窗口内的均速，口径与方格一致。曲线会将最近 24 小时内首尾有效均速点之间的真实时间范围铺满横轴，中间断档保留；悬停读数仍对应实际分钟。曲线上的悬停读数给出光标所在分钟的均速（该统计窗口内该方向的字节增量 ÷ 有流量的秒数），并带一条竖直指示线标出该分钟；历史曲线只用均速，不使用峰值代替。旧历史若有字节但缺少对应方向的活跃秒，该方向窗口均速无法还原，曲线留空并提示，流量柱状图仍保留原字节；不再擅自按 60 秒摊薄。此前已经被补写为 60 秒的少量旧记录无法与真实 60 秒数据可靠区分，不能自动恢复。
 
@@ -121,7 +129,9 @@ After launch the settings window and the always-on-top tiles are visible at the 
 
 The Windows tray uses green download and blue upload arrows. `assets/tray/netmeter.ico` includes seven sizes from 16 to 64px, replacing the SVG input that decoded as an empty native image. Click and context-menu behavior is unchanged.
 
-The settings title bar, widget window, and tray share the same transfer-arrow ICO. Startup updates the old icon in the user-data directory before creating any windows. `scripts/install-start-menu.ps1` creates the `NetMeter` Start menu shortcut using that same shipped icon instead of redrawing the obsolete waveform. “Pin to Start menu” regenerates the shortcut, and the app recreates it on startup when it is missing.
+The settings title bar, widget window, and tray share the same transfer-arrow ICO. Startup updates the old icon in the user-data directory before creating any windows. `scripts/install-start-menu.ps1` creates the `NetMeter` Start menu shortcut using that same shipped icon instead of redrawing the obsolete waveform; startup recreates a missing shortcut.
+
+**Creating a shortcut is not pinning it.** Choose “Pin to Start…” in the tray or tile context menu to prepare the shortcut and request native pinning. Success is reported only after Windows confirms it. If Windows rejects automatic pinning, the app explicitly says it is not pinned yet: choose “Open shortcut location”, right-click the selected `NetMeter` shortcut, then choose “Pin to Start” (use “Show more options” first if needed). Cancel does not open Explorer, and startup never automatically pins the app.
 
 The statistics row of a tile shows the average by default; click “Avg” to switch it to “Peak”. Each tile switches on its own. The average and the peak share the statistics window chosen in the settings (last 2 / 5 / 10 minutes, 5 minutes by default): the average is the byte delta in that window ÷ the seconds in that direction that carried traffic, computed separately for download and upload with idle seconds excluded from the denominator; the peak is the highest single-sample speed of that direction inside the same window, and it falls back as soon as its sample leaves the window. Both show “—” when the direction had no traffic in the window. Click the domain at the top of a tile to open that domain's traffic history; the history view expands inside the tile window itself, using the same solid window background as the tiles, with no inner dialog and no scroll area. The history panel has two tabs: “Traffic” is the bar chart of the last 24 hours, and “Average speed” is the curve for the same window, whose vertical axis is the average inside the same statistics window and uses the same definition as the tiles. The time range between the first and last valid average points within the last 24 hours fills the plot width; internal gaps retain their actual duration and hover readouts keep the real minute. Hovering the curve reads out the average speed of the minute under the cursor (the byte delta in that statistics window ÷ the seconds that carried traffic) and marks the minute with a vertical guide line; the history curve only ever reports averages and never substitutes a peak. If older byte records lack active seconds for a direction, that direction’s window cannot have a truthful average: the curve has a gap and a bilingual notice, while the traffic bars retain their byte totals. We no longer spread such bytes over an invented 60 seconds. Some earlier records already written with a synthetic 60 seconds cannot reliably be distinguished from genuine 60-second records or reconstructed automatically.
 

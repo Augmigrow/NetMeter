@@ -1,10 +1,11 @@
-﻿import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, safeStorage } from 'electron';
+﻿import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, safeStorage, shell, dialog } from 'electron';
 import { resolve, dirname, join } from 'node:path';
 import { appendFile, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createNetMeterServer } from './server.mjs';
+import { createPinToStartAction } from './start-menu.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 let server;
@@ -27,7 +28,18 @@ const UI_STRINGS = {
     settingsTitle: 'NetMeter 设置',
     showHideWidget: '显示/隐藏方格',
     settings: '设置',
-    pinToStart: '固定到开始菜单',
+    pinToStart: '固定到开始菜单…',
+    pinTitle: '固定 NetMeter 到开始菜单',
+    pinManual: '请在 Windows 右键菜单中完成固定',
+    pinManualDetail: '快捷方式已准备好，但尚未固定。点击“打开快捷方式位置”，在选中的 NetMeter 上右键，选择“固定到开始”或“固定到开始屏幕”；若未显示，请先点“显示更多选项”。',
+    pinOpenShortcut: '打开快捷方式位置',
+    pinActionFailed: '固定操作未完成，请重试。',
+    pinInstallFailed: '无法创建 NetMeter 快捷方式',
+    pinInstallFailedDetail: '未执行固定。请检查开始菜单文件夹的写入权限后重试。',
+    pinSuccess: 'NetMeter 已固定到开始菜单',
+    pinAlready: 'NetMeter 已经固定到开始菜单',
+    ok: '确定',
+    cancel: '取消',
     hideWidget: '隐藏方格',
     quit: '退出 NetMeter'
   },
@@ -36,7 +48,18 @@ const UI_STRINGS = {
     settingsTitle: 'NetMeter Settings',
     showHideWidget: 'Show/Hide tiles',
     settings: 'Settings',
-    pinToStart: 'Pin to Start menu',
+    pinToStart: 'Pin to Start…',
+    pinTitle: 'Pin NetMeter to Start',
+    pinManual: 'Finish pinning in the Windows context menu',
+    pinManualDetail: 'The shortcut is ready, but it is not pinned yet. Click “Open shortcut location”, right-click the selected NetMeter shortcut and choose “Pin to Start”. If it is missing, choose “Show more options” first.',
+    pinOpenShortcut: 'Open shortcut location',
+    pinActionFailed: 'Pinning did not finish. Please try again.',
+    pinInstallFailed: 'Could not create the NetMeter shortcut',
+    pinInstallFailedDetail: 'Nothing was pinned. Check write access to the Start menu folder and try again.',
+    pinSuccess: 'NetMeter is now pinned to Start',
+    pinAlready: 'NetMeter is already pinned to Start',
+    ok: 'OK',
+    cancel: 'Cancel',
     hideWidget: 'Hide tiles',
     quit: 'Quit NetMeter'
   }
@@ -45,6 +68,18 @@ const UI_STRINGS = {
 function strings() {
   return UI_STRINGS[uiLanguage] || UI_STRINGS.zh;
 }
+
+
+const pinToStartMenu = createPinToStartAction({
+  installShortcut: installStartMenuShortcut,
+  requestPin: requestStartMenuPin,
+  revealShortcut: () => shell.showItemInFolder(startMenuShortcutPath()),
+  getStrings: strings,
+  showDialog: options => {
+    const parent = settingsWindow?.isVisible() ? settingsWindow : widgetWindow?.isVisible() ? widgetWindow : null;
+    return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+  }
+});
 
 function controllerConfigPath() {
   return join(app.getPath('userData'), 'controller-config.bin');
@@ -106,9 +141,36 @@ function scheduleWidgetWindowStateSave() {
 function installStartMenuShortcut() {
   return new Promise(resolveResult => {
     const script = resolve(root, 'scripts', 'install-start-menu.ps1');
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-TargetPath', process.execPath, '-Arguments', `"${root}"`, '-WorkingDirectory', root, '-IconPath', appIconPath()], { windowsHide: true });
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-TargetPath', process.execPath, '-Arguments', `"${root}"`, '-WorkingDirectory', root, '-IconPath', appIconPath(), '-ShortcutPath', startMenuShortcutPath()], { windowsHide: true });
     child.on('error', () => resolveResult(false));
     child.on('close', code => resolveResult(code === 0));
+  });
+}
+
+function requestStartMenuPin() {
+  return new Promise(resolveResult => {
+    const script = resolve(root, 'scripts', 'pin-start-menu.ps1');
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
+      '-ShortcutPath', startMenuShortcutPath()], { windowsHide: true });
+    let output = '';
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolveResult(result);
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish({ state: 'manual-required', reason: 'timeout' });
+    }, 12000);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => { if (output.length < 8192) output += chunk; });
+    child.on('error', () => finish({ state: 'manual-required', reason: 'launch-failed' }));
+    child.on('close', () => {
+      try { finish(JSON.parse(output.trim())); }
+      catch { finish({ state: 'manual-required', reason: 'invalid-response' }); }
+    });
   });
 }
 
@@ -249,7 +311,7 @@ function showWidget() {
       if (!widgetWindow) return;
       const menu = Menu.buildFromTemplate([
         { label: strings().settings, click: showSettings },
-        { label: strings().pinToStart, click: () => { installStartMenuShortcut().then(() => {}); } },
+        { id: 'pin-to-start', label: strings().pinToStart, click: () => { pinToStartMenu().catch(() => { dialog.showErrorBox(strings().pinTitle, strings().pinActionFailed); }); } },
         { label: strings().hideWidget, click: () => widgetWindow?.hide() },
         { type: 'separator' },
         { label: strings().quit, click: () => app.quit() }
@@ -285,7 +347,7 @@ function refreshTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: strings().showHideWidget, click: toggleWidget },
     { label: strings().settings, click: showSettings },
-    { label: strings().pinToStart, click: () => { installStartMenuShortcut(); } },
+    { id: 'pin-to-start', label: strings().pinToStart, click: () => { pinToStartMenu().catch(() => { dialog.showErrorBox(strings().pinTitle, strings().pinActionFailed); }); } },
     { type: 'separator' },
     { label: strings().quit, click: () => app.quit() }
   ]));

@@ -102,20 +102,21 @@ test('first startup creates the icon directory and invalid bundled icons do not 
   }
 });
 
-test('Pin to Start launches the installer using the path resolver, not the Promise resolver', async () => {
+test('Start menu shortcut installation uses the path resolver, not the Promise resolver', async () => {
   const code = mainSource.slice(mainSource.indexOf('function installStartMenuShortcut()'), mainSource.indexOf('async function loadControllerConfig()'));
   let launched;
-  const install = new Function('root', 'resolve', 'spawn', 'process', 'appIconPath', code + '\nreturn installStartMenuShortcut;')(
+  const install = new Function('root', 'resolve', 'spawn', 'process', 'appIconPath', 'startMenuShortcutPath', code + '\nreturn installStartMenuShortcut;')(
     root, resolve, (...arguments_) => {
       launched = arguments_;
       const child = new EventEmitter();
       queueMicrotask(() => child.emit('close', 0));
       return child;
-    }, { execPath: 'electron.exe' }, () => 'installed-netmeter.ico');
+    }, { execPath: 'electron.exe' }, () => 'installed-netmeter.ico', () => 'installed-NetMeter.lnk');
   assert.equal(await install(), true);
   assert.equal(launched[0], 'powershell.exe');
   assert.ok(launched[1].includes(resolve(root, 'scripts', 'install-start-menu.ps1')));
   assert.ok(launched[1].includes('installed-netmeter.ico'));
+  assert.ok(launched[1].includes('installed-NetMeter.lnk'));
   assert.equal(launched[2].windowsHide, true);
 });
 
