@@ -1,0 +1,1743 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#e9eeec">
+  <title>NetMeter</title>
+  <style>
+    :root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #1c2d38; background: #e9eeec; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; min-height: 100vh; }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    .workspace { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
+    .stage { position: relative; min-width: 0; padding: 38px; background: #e9eeec; }
+    .stage-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+    .stage-heading h1 { margin: 0; font-size: 16px; font-weight: 700; }
+    .stage-status { display: inline-flex; align-items: center; gap: 7px; color: #6a7a79; font-size: 12px; }
+    .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: #9aa8a2; }
+    .connection-dot.connected { background: #28a56f; }
+    .connection-dot.error { background: #d47c50; }
+    .connection-dot.disabled { background: #9aa8a2; }
+    .meters { position: relative; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 14px; }
+    .alignment-guide { position: absolute; z-index: 15; display: none; pointer-events: none; background: #77b9de; box-shadow: 0 0 0 1px rgba(119, 185, 222, .16); }
+    .alignment-guide.vertical { top: 0; bottom: 0; width: 1px; }
+    .alignment-guide.horizontal { right: 0; left: 0; height: 1px; }
+    .alignment-guide.show { display: block; }
+    .meter { width: 180px; height: 148px; flex: 0 0 180px; display: grid; grid-template-rows: 29px 61px 27px 29px; overflow: hidden; border: 1px solid #344b60; border-radius: 7px; color: #edf5ff; background: rgba(21, 40, 63, .97); box-shadow: 0 7px 17px rgba(23, 40, 50, .17); user-select: none; cursor: default; transition: opacity .12s, transform .12s; }
+    .meter:focus-visible { outline: 3px solid #70b7dc; outline-offset: 3px; }
+    .meter.dragging { opacity: .48; transform: scale(.98); }
+    .meter-head { min-width: 0; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid #40556d; }
+    .status-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #8e9eaf; }
+    .status-dot.active { background: #45db8b; }
+    .host-button { min-width: 0; padding: 0; overflow: hidden; border: 0; color: inherit; background: transparent; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 700; text-align: left; }
+    .host-button:hover { color: #fff; }
+    .settings-button { width: 20px; height: 20px; flex: 0 0 20px; display: grid; place-items: center; margin-left: auto; padding: 0; border: 0; color: #bacada; background: transparent; font-family: "Segoe UI Symbol", sans-serif; font-size: 16px; line-height: 1; }
+    .settings-button:hover { color: #fff; }
+    .rates { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #40556d; }
+    .rate { min-width: 0; padding: 4px 8px 0 10px; }
+    .rate + .rate { border-left: 1px solid #40556d; }
+    .rate-label { display: flex; align-items: center; gap: 4px; height: 21px; color: #e5edf5; font-size: 12px; }
+    .arrow { display: block; width: 10px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .down { color: #46db8b; }
+    .up { color: #43b8ff; }
+    .speed { display: block; margin-top: 4px; overflow: hidden; font-size: 17px; line-height: 21px; font-weight: 700; letter-spacing: 0; white-space: nowrap; }
+    .stat { display: grid; grid-template-columns: 30px 63px minmax(0, 1fr); align-items: center; padding: 0 7px; color: #f1f6fb; font-size: 13px; white-space: nowrap; }
+    /* English labels are wider than the chinese ones, so the label column gets
+       a few extra pixels taken from the value columns; the tile size is fixed. */
+    body.lang-en .stat { grid-template-columns: 37px 59px minmax(0, 1fr); }
+    .stat-name, .mode-toggle { color: #b5cadf; font-weight: 500; }
+    .mode-toggle { justify-self: start; padding: 0; border: 0; background: transparent; font: inherit; line-height: 1.2; text-align: left; cursor: pointer; }
+    .mode-toggle:hover { color: #f1f6fb; }
+    .mode-toggle:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+    .stat-value { min-width: 0; display: flex; align-items: center; gap: 3px; overflow: hidden; }
+    .stat-value .arrow { width: 7px; height: 11px; stroke-width: 2; }
+    .meter.light { border-color: #abbcc8; color: #1a3148; background: #f7fafc; }
+    .meter.light .meter-head, .meter.light .rates, .meter.light .rate + .rate { border-color: #d7e1e8; }
+    .meter.light .rate-label, .meter.light .stat { color: #183249; }
+    .meter.light .stat-name, .meter.light .mode-toggle { color: #5b748a; }
+    .meter.light .settings-button, .meter.light .host-button { color: #21445e; }
+    .meter.light .down { color: #169462; }
+    .meter.light .up { color: #147eb9; }
+    .settings { min-width: 0; padding: 30px 26px; border-left: 1px solid #d7e0dc; background: #fff; }
+    .settings h2 { margin: 0 0 5px; font-size: 18px; }
+    .settings-lede { margin: 0 0 22px; color: #60736d; font-size: 12px; line-height: 1.65; }
+    .controller-block { padding: 14px 0 4px; border-top: 1px solid #e2eae5; border-bottom: 1px solid #e2eae5; margin-bottom: 18px; }
+    .toggle-line { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    .toggle-copy strong { display: block; color: #344941; font-size: 13px; }
+    .toggle-copy small { display: block; margin-top: 3px; color: #6c7e76; font-size: 11px; line-height: 1.45; }
+    .switch { position: relative; width: 42px; height: 24px; flex: 0 0 auto; }
+    .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+    .switch-track { position: absolute; inset: 0; border-radius: 99px; background: #c8d4ce; transition: .2s; }
+    .switch-track::after { content: ""; position: absolute; width: 18px; height: 18px; top: 3px; left: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: .2s; }
+    .switch input:checked + .switch-track { background: #1681f5; }
+    .switch input:checked + .switch-track::after { transform: translateX(18px); }
+    .field { display: grid; gap: 7px; margin-bottom: 17px; }
+    .field label { font-size: 12px; font-weight: 700; color: #344941; }
+    .field small { color: #6c7e76; font-size: 11px; line-height: 1.5; }
+    input, textarea, select { width: 100%; padding: 10px 11px; border: 1px solid #d7e1dc; border-radius: 6px; outline: 0; color: #1e312b; background: #fff; font-size: 13px; }
+    input:focus, textarea:focus, select:focus { border-color: #33896e; box-shadow: 0 0 0 3px rgba(51, 137, 110, .12); }
+    textarea { min-height: 105px; resize: vertical; line-height: 1.55; }
+    .input-with-action { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 8px; align-items: center; }
+    .icon-button { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; color: #167cf0; background: transparent; }
+    .icon-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .icon-button:hover { background: #edf5ff; }
+    .controller-status { min-height: 18px; margin: -4px 0 13px; color: #74827b; font-size: 11px; }
+    .controller-status[data-state="connected"] { color: #288b63; }
+    .controller-status[data-state="error"] { color: #bc6842; }
+    .fixed-spec { padding: 12px 13px; border-left: 3px solid #4190aa; color: #3d5b68; background: #eef5f7; font-size: 12px; line-height: 1.65; }
+    .save-note { min-height: 18px; margin: 15px 0 10px; color: #74827b; font-size: 11px; }
+    .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+    .button { min-height: 38px; border: 1px solid #b7c5d2; border-radius: 5px; color: #167cf0; background: #fff; font-size: 13px; font-weight: 700; }
+    .button:hover { background: #f3f8ff; }
+    .button.primary { border-color: #167cf0; color: #fff; background: #167cf0; }
+    .button.primary:hover { background: #066bdc; }
+    .copy-button { width: 100%; min-height: 36px; margin-top: 9px; border: 0; border-radius: 5px; color: #287657; background: transparent; font-size: 12px; font-weight: 700; }
+    .copy-button:hover { background: #eef8f3; }
+    .copy-fallback { display: none; margin-top: 10px; min-height: 140px; }
+    .copy-fallback.show { display: block; }
+    .toast { position: fixed; right: 20px; bottom: 20px; max-width: min(340px, calc(100vw - 40px)); padding: 10px 13px; border-radius: 6px; color: white; background: #193a31; box-shadow: 0 6px 20px rgba(0,0,0,.15); font-size: 12px; opacity: 0; transform: translateY(8px); pointer-events: none; transition: .18s; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .history-panel { --history-down: #15966d; --history-up: #1681f5; min-height: 280px; padding: 18px; color: #20342c; background: #15283f; }
+    .history-head { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+    .history-title { min-width: 0; }
+    .history-kicker { display: block; margin-bottom: 2px; color: #6f827a; font-size: 11px; }
+    .history-title h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+    .close-button { width: 26px; height: 26px; flex: 0 0 26px; padding: 0; border: 0; border-radius: 4px; color: #586e62; background: transparent; font-size: 20px; line-height: 1; }
+    .close-button:hover { background: rgba(255, 255, 255, .1); }
+    .history-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+    .history-item { min-width: 0; }
+    .history-item small { display: block; margin-bottom: 3px; color: #809087; font-size: 10px; }
+    .history-item strong { display: block; overflow: hidden; text-overflow: ellipsis; color: #263e34; font-size: 14px; white-space: nowrap; }
+    .history-chart { height: 152px; display: grid; grid-template-columns: repeat(24, minmax(2px, 1fr)); align-items: end; gap: 3px; padding: 9px 4px 0; background: repeating-linear-gradient(to bottom, transparent 0, transparent 37px, rgba(92, 119, 107, .14) 38px); }
+    .history-hour { height: 126px; display: flex; align-items: end; gap: 1px; }
+    .history-bar-down, .history-bar-up { min-width: 1px; flex: 1; border-radius: 2px 2px 0 0; }
+    .history-bar-down { background: var(--history-down); }
+    .history-bar-up { background: var(--history-up); }
+    .history-empty { grid-column: 1 / -1; align-self: center; color: #809087; font-size: 12px; text-align: center; }
+    .history-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+    .history-tab { padding: 3px 9px; border: 0; border-radius: 4px; color: #809087; background: transparent; font-size: 11px; font-weight: 500; }
+    .history-tab:hover { color: #263e34; }
+    .history-tab[aria-selected="true"] { color: #263e34; background: rgba(92, 119, 107, .16); }
+    .history-tab:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+    .history-speed-chart { height: 152px; display: grid; grid-template-columns: minmax(0, 1fr); align-items: end; padding: 9px 4px 0; background: repeating-linear-gradient(to bottom, transparent 0, transparent 37px, rgba(92, 119, 107, .14) 38px); }
+    .history-speed-svg { display: block; width: 100%; height: 126px; }
+    .history-speed-line { fill: none; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+    .history-speed-line.down { stroke: var(--history-down); }
+    .history-speed-line.up { stroke: var(--history-up); }
+    .history-speed-hit { fill: transparent; }
+    .history-speed-hit:hover { fill: rgba(92, 119, 107, .08); }
+    .meter-empty { color: #687b75; font-size: 12px; padding: 12px 2px; }
+    body.settings-mode { min-height: 100vh; background: #fff; }
+    body.settings-mode .workspace { min-height: 100vh; display: block; }
+    body.settings-mode .stage { display: none; }
+    body.settings-mode .settings { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; border: 0; }
+    html.widget-mode, body.widget-mode, body.widget-mode .workspace { min-height: 0; background: transparent; }
+    body.widget-mode { overflow: hidden; }
+    body.widget-mode .workspace { display: block; height: 100vh; }
+    body.widget-mode .stage { height: 100vh; min-height: 0; padding: 0; overflow: hidden; background: transparent; }
+    body.widget-mode .stage-heading, body.widget-mode .settings { display: none; }
+    body.widget-mode .meters { position: relative; display: block; width: 100%; height: 100%; }
+    body.widget-mode .meter { position: absolute; width: 180px; height: 148px; touch-action: none; -webkit-app-region: no-drag; cursor: grab; }
+    body.widget-mode .host-button, body.widget-mode .settings-button, body.widget-mode .mode-toggle { cursor: pointer; }
+    body.widget-mode.history-mode .stage { padding: 0; }
+    body.widget-mode .history-panel { height: 100%; min-height: 0; padding: 9px 12px 8px; overflow: hidden; border-radius: 7px; color: #edf5ff; background: #15283f; }
+    body.widget-mode .history-panel.light { color: #183249; background: #f7fafc; }
+    body.widget-mode .history-kicker, body.widget-mode .history-item small { color: #9fb5c8; }
+    body.widget-mode .history-panel.light .history-kicker, body.widget-mode .history-panel.light .history-item small { color: #6f8495; }
+    body.widget-mode .history-title h2, body.widget-mode .history-item strong { color: inherit; }
+    body.widget-mode .history-item strong.down { color: #46db8b; }
+    body.widget-mode .history-item strong.up { color: #43b8ff; }
+    body.widget-mode .history-chart { background: repeating-linear-gradient(to bottom, transparent 0, transparent 40px, rgba(157, 181, 200, .17) 41px); }
+    body.widget-mode .history-speed-chart { background: repeating-linear-gradient(to bottom, transparent 0, transparent 40px, rgba(157, 181, 200, .17) 41px); }
+    body.widget-mode .history-speed-hit:hover { fill: rgba(157, 181, 200, .1); }
+    body.widget-mode .history-tab { color: #9fb5c8; }
+    body.widget-mode .history-tab:hover { color: #edf5ff; }
+    body.widget-mode .history-tab[aria-selected="true"] { color: #edf5ff; background: rgba(157, 181, 200, .18); }
+    body.widget-mode .history-panel.light .history-tab { color: #6f8495; }
+    body.widget-mode .history-panel.light .history-tab:hover { color: #183249; }
+    body.widget-mode .history-panel.light .history-tab[aria-selected="true"] { color: #183249; background: rgba(92, 119, 107, .16); }
+    body.widget-mode .close-button { color: #b9cede; }
+    body.widget-mode .history-panel.light .close-button { color: #46657c; }
+    body.widget-mode.ctrl-held .meter { cursor: move; }
+    body.widget-mode.dragging .meter { cursor: grabbing; }
+    body.widget-mode.window-dragging .meter { cursor: grabbing; }
+    @media (max-width: 750px) { .workspace { grid-template-columns: 1fr; } .stage { min-height: 270px; padding: 24px 18px; } .stage-heading { margin-bottom: 18px; } .settings { border-left: 0; border-top: 1px solid #d7e0dc; padding: 22px 18px 32px; } }
+  </style>
+</head>
+<body>
+  <main class="workspace">
+    <section class="stage" aria-label="悬浮方格外观预览" data-i18n-aria="stage.label">
+      <div class="stage-heading"><h1>NetMeter</h1><span class="stage-status"><span id="connectionDot" class="connection-dot"></span><span id="connectionStatus" data-i18n="status.offline">未连接</span></span></div>
+      <div id="meters" class="meters"></div>
+      <span id="verticalAlignmentGuide" class="alignment-guide vertical" aria-hidden="true"></span>
+      <span id="horizontalAlignmentGuide" class="alignment-guide horizontal" aria-hidden="true"></span>
+      <section id="historyPanel" class="history-panel" aria-labelledby="dialogTitle" hidden><div class="history-head"><div class="history-title"><span class="history-kicker" data-i18n="history.last24h">最近 24 小时</span><h2 id="dialogTitle">历史流量</h2></div><button id="closeDialog" class="close-button" type="button" aria-label="关闭" title="关闭" data-i18n-aria="action.close" data-i18n-title="action.close">×</button></div><div id="historySummary" class="history-summary"></div><div class="history-tabs" role="tablist" aria-label="历史视图" data-i18n-aria="history.views"><button id="historyTabTraffic" class="history-tab" type="button" role="tab" data-tab="traffic" aria-selected="true" aria-controls="historyChart" data-i18n="history.tabTraffic">历史流量</button><button id="historyTabSpeed" class="history-tab" type="button" role="tab" data-tab="speed" aria-selected="false" aria-controls="historySpeedChart" data-i18n="history.tabSpeed">历史均速</button></div><div id="historyChart" class="history-chart" role="tabpanel" aria-labelledby="historyTabTraffic"></div><div id="historySpeedChart" class="history-speed-chart" role="tabpanel" aria-labelledby="historyTabSpeed" hidden></div></section>
+    </section>
+    <aside class="settings">
+      <h2 data-i18n="settings.controller">外部控制器</h2>
+      <p class="settings-lede" data-i18n="settings.lede">读取代理控制器中的活动连接，按域名聚合下载、上传速度和本地累计流量。</p>
+      <form id="preferences">
+        <section class="controller-block" aria-label="外部控制器设置" data-i18n-aria="settings.controllerBlock">
+          <div class="toggle-line">
+            <div class="toggle-copy"><strong data-i18n="settings.enable">启用外部控制器</strong><small data-i18n="settings.enableHint">连接本机代理控制器 API</small></div>
+            <label class="switch"><input id="controllerEnabled" type="checkbox" checked><span class="switch-track"></span></label>
+          </div>
+          <div class="field"><label for="controllerAddress" data-i18n="settings.address">外部控制器监听地址</label><div class="input-with-action"><input id="controllerAddress" type="text" value="127.0.0.1:9097" placeholder="127.0.0.1:9097" autocomplete="off"><button id="toggleAddressVisibility" class="icon-button" type="button" aria-label="隐藏监听地址" title="隐藏监听地址" data-i18n-aria="settings.hideAddress" data-i18n-title="settings.hideAddress"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/></svg></button></div></div>
+          <div class="field"><label for="controllerSecret" data-i18n="settings.secret">API 访问密钥</label><div class="input-with-action"><input id="controllerSecret" type="password" placeholder="set-your-secret" autocomplete="new-password"><button id="toggleSecretVisibility" class="icon-button" type="button" aria-label="显示访问密钥" title="显示访问密钥" data-i18n-aria="settings.showSecret" data-i18n-title="settings.showSecret"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div><small id="secretStorageNote" data-i18n="settings.secretNote">密钥使用 Windows 当前用户凭据加密保存；重启后留空即可继续使用。</small></div>
+          <p id="controllerStatus" class="controller-status" data-state="idle" data-i18n="settings.statusWaiting">等待保存配置</p>
+        </section>
+        <div class="field"><label for="proxyApp" data-i18n="settings.proxyApp">代理软件</label><input id="proxyApp" type="text" value="Clash Verge" placeholder="例如 Clash Verge" autocomplete="off" data-i18n-placeholder="settings.proxyAppPlaceholder"></div>
+        <div class="field"><label for="domains" data-i18n="settings.domains">要看的域名或 URL</label><textarea id="domains" placeholder="每行一个，例如：\nexample.com\napi.example.com" data-i18n-placeholder="settings.domainsPlaceholder"></textarea><small data-i18n="settings.domainsHint">每个域名对应一个方格；会匹配该域名及其子域名。</small></div>
+        <div class="field"><label for="history" data-i18n="settings.retention">历史流量保留</label><select id="history"><option value="7天">7 天</option><option value="30天">30 天</option><option value="长期">长期</option></select></div>
+        <div class="field"><label for="avgWindow" data-i18n="settings.avgWindow">均速统计窗口</label><select id="avgWindow"><option value="2分钟">最近 2 分钟</option><option value="5分钟" selected>最近 5 分钟</option><option value="10分钟">最近 10 分钟</option></select><small data-i18n="settings.avgWindowHint">均速 = 窗口内的流量 ÷ 有流量的秒数；下载与上传分别计算，空闲秒不计入分母。窗口内该方向没有流量时显示「—」。峰值采用同一窗口内的最高单次速度，样本滑出窗口后自动回落。</small></div>
+        <div class="field"><label for="language" data-i18n="settings.language">界面语言</label><select id="language"><option value="zh">简体中文</option><option value="en">English</option></select><small data-i18n="settings.languageHint">界面语言立即生效；设置页与悬浮方格共用同一个选择。</small></div>
+        <div class="toggle-line"><div class="toggle-copy"><strong id="themeLabel" data-i18n="settings.lightTheme">浅色方格</strong></div><label class="switch"><input id="lightTheme" type="checkbox" aria-labelledby="themeLabel"><span class="switch-track"></span></label></div>
+        <div class="fixed-spec" data-i18n="settings.spec">外观按参考图复刻：深色小窗、下载/上传两列、均速和累计两行。尺寸先按图中比例，后续再微调；方格数据来自控制器连接统计，不主动测速。</div>
+        <p id="saveNote" class="save-note" data-i18n="settings.saveNote">设置保存在当前浏览器，API 密钥使用 Windows 凭据加密保存。</p>
+        <div class="settings-actions"><button id="cancelSettings" class="button" type="button" data-i18n="action.cancel">取消</button><button class="button primary" type="submit" data-i18n="action.save">保存</button></div>
+        <button id="copySummary" class="copy-button" type="button" data-i18n="action.copySummary">复制需求摘要</button>
+        <textarea id="copyFallback" class="copy-fallback" readonly aria-label="需求摘要" data-i18n-aria="summary.label"></textarea>
+      </form>
+    </aside>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script>
+    (() => {
+      const KEY = 'netmeter-controller-v2';
+      const I18N = {
+        zh: {
+          'app.title': 'NetMeter 控制器方格',
+          'app.titleWidget': 'NetMeter 控制器方格',
+          'app.titleSettings': 'NetMeter 设置',
+          'stage.label': '悬浮方格外观预览',
+          'status.offline': '未连接',
+          'status.connected': '已连接 · {count} 个活动连接',
+          'status.connectFailed': '连接失败 · {message}',
+          'status.dirty': '设置已修改，请保存',
+          'status.disabled': '已停用',
+          'status.restoreFailed': '无法恢复控制器配置',
+          'status.needSecret': '请输入 API 访问密钥',
+          'status.connecting': '正在连接控制器',
+          'status.serviceDown': '本地采集服务未运行',
+          'status.configFailed': '配置失败 · {message}',
+          'status.configFailedDefault': '无法保存',
+          'history.last24h': '最近 24 小时',
+          'history.views': '历史视图',
+          'history.tabTraffic': '历史流量',
+          'history.tabSpeed': '历史均速',
+          'history.summaryDownTotal': '下载累计',
+          'history.summaryUpTotal': '上传累计',
+          'history.summaryDownAverage': '下载均速',
+          'history.summaryUpAverage': '上传均速',
+          'history.emptyTraffic': '尚未记录到历史流量',
+          'history.emptySpeed': '尚无历史均速记录',
+          'history.barTitle': '下载 {down} · 上传 {up}',
+          'history.curveLabel': '最近 24 小时均速曲线',
+          'history.peakTitle': '下载峰值 {down} · 上传峰值 {up}',
+          'meter.empty': '先在设置中添加要观察的域名',
+          'meter.down': '下载',
+          'meter.up': '上传',
+          'meter.total': '累计',
+          'meter.modeAverage': '均速',
+          'meter.modePeak': '峰值',
+          'meter.switchToAverage': '切换为均速',
+          'meter.switchToPeak': '切换为峰值',
+          'meter.historyTitle': '查看历史流量',
+          'meter.settingsTitle': '设置',
+          'meter.openSettings': '打开设置',
+          'meter.saved': '方格位置已保存',
+          'settings.controller': '外部控制器',
+          'settings.lede': '读取代理控制器中的活动连接，按域名聚合下载、上传速度和本地累计流量。',
+          'settings.controllerBlock': '外部控制器设置',
+          'settings.enable': '启用外部控制器',
+          'settings.enableHint': '连接本机代理控制器 API',
+          'settings.address': '外部控制器监听地址',
+          'settings.hideAddress': '隐藏监听地址',
+          'settings.showAddress': '显示监听地址',
+          'settings.secret': 'API 访问密钥',
+          'settings.showSecret': '显示访问密钥',
+          'settings.hideSecret': '隐藏访问密钥',
+          'settings.secretNote': '密钥使用 Windows 当前用户凭据加密保存；重启后留空即可继续使用。',
+          'settings.secretNoteSaved': '密钥已使用 Windows 当前用户凭据加密保存；重启后无需重新输入。',
+          'settings.secretPersistFailed': '密钥未能安全保存',
+          'settings.secretPlaceholder': 'set-your-secret',
+          'settings.secretPlaceholderSaved': '已安全保存，留空继续使用',
+          'settings.statusWaiting': '等待保存配置',
+          'settings.proxyApp': '代理软件',
+          'settings.proxyAppPlaceholder': '例如 Clash Verge',
+          'settings.domains': '要看的域名或 URL',
+          'settings.domainsPlaceholder': '每行一个，例如：\nexample.com\napi.example.com',
+          'settings.domainsHint': '每个域名对应一个方格；会匹配该域名及其子域名。',
+          'settings.retention': '历史流量保留',
+          'settings.retention7': '7 天',
+          'settings.retention30': '30 天',
+          'settings.retentionForever': '长期',
+          'settings.avgWindow': '均速统计窗口',
+          'settings.window2': '最近 2 分钟',
+          'settings.window5': '最近 5 分钟',
+          'settings.window10': '最近 10 分钟',
+          'settings.avgWindowHint': '均速 = 窗口内的流量 ÷ 有流量的秒数；下载与上传分别计算，空闲秒不计入分母。窗口内该方向没有流量时显示「—」。峰值采用同一窗口内的最高单次速度，样本滑出窗口后自动回落。',
+          'settings.language': '界面语言',
+          'settings.languageHint': '界面语言立即生效；设置页与悬浮方格共用同一个选择。',
+          'settings.lightTheme': '浅色方格',
+          'settings.spec': '外观按参考图复刻：深色小窗、下载/上传两列、均速和累计两行。尺寸先按图中比例，后续再微调；方格数据来自控制器连接统计，不主动测速。',
+          'settings.saveNote': '设置保存在当前浏览器，API 密钥使用 Windows 凭据加密保存。',
+          'settings.saveNoteSaved': '已保存设置，API 密钥使用 Windows 凭据加密保存',
+          'settings.saveNoteUnavailable': '当前浏览器未开放本地保存。',
+          'action.cancel': '取消',
+          'action.save': '保存',
+          'action.close': '关闭',
+          'action.copySummary': '复制需求摘要',
+          'summary.label': '需求摘要',
+          'summary.title': 'NetMeter 需求：',
+          'summary.point1': '- 通过本机代理外部控制器读取指定域名的真实连接流量，不主动测速。',
+          'summary.point2': '- 外观复刻参考图：每域名一个约 180×148 的深色悬浮方格，显示下载/上传实时速度、均速、累计流量；点击查看历史。',
+          'summary.address': '- 控制器地址：',
+          'summary.proxyApp': '- 代理软件：',
+          'summary.domains': '- 域名：',
+          'summary.history': '- 历史保留：',
+          'summary.avgWindow': '- 均速窗口：{window}（仅统计有流量的活跃秒）',
+          'summary.pending': '待填写',
+          'summary.pendingConfirm': '待确认',
+          'toast.copied': '已复制需求摘要；密钥未包含在摘要中',
+          'toast.copyBlocked': '当前浏览器不允许自动复制',
+          'toast.savedKey': '设置已保存，密钥已安全保存',
+          'toast.savedNoKey': '设置已保存，控制器尚未连接',
+          'toast.restored': '已恢复上次保存的设置'
+        },
+        en: {
+          'app.title': 'NetMeter Controller Tiles',
+          'app.titleWidget': 'NetMeter Controller Tiles',
+          'app.titleSettings': 'NetMeter Settings',
+          'stage.label': 'Floating tile preview',
+          'status.offline': 'Not connected',
+          'status.connected': 'Connected · {count} active connections',
+          'status.connectFailed': 'Connection failed · {message}',
+          'status.dirty': 'Settings changed, please save',
+          'status.disabled': 'Disabled',
+          'status.restoreFailed': 'Could not restore the controller configuration',
+          'status.needSecret': 'Enter the API access key',
+          'status.connecting': 'Connecting to the controller',
+          'status.serviceDown': 'Local collector service is not running',
+          'status.configFailed': 'Configuration failed · {message}',
+          'status.configFailedDefault': 'Could not save',
+          'history.last24h': 'Last 24 hours',
+          'history.views': 'History views',
+          'history.tabTraffic': 'Traffic',
+          'history.tabSpeed': 'Average speed',
+          'history.summaryDownTotal': 'Down total',
+          'history.summaryUpTotal': 'Up total',
+          'history.summaryDownAverage': 'Down average',
+          'history.summaryUpAverage': 'Up average',
+          'history.emptyTraffic': 'No traffic history recorded yet',
+          'history.emptySpeed': 'No average speed history yet',
+          'history.barTitle': 'Down {down} · Up {up}',
+          'history.curveLabel': 'Average speed curve for the last 24 hours',
+          'history.peakTitle': 'Down peak {down} · Up peak {up}',
+          'meter.empty': 'Add a domain to watch in Settings first',
+          'meter.down': 'Down',
+          'meter.up': 'Up',
+          'meter.total': 'Total',
+          'meter.modeAverage': 'Avg',
+          'meter.modePeak': 'Peak',
+          'meter.switchToAverage': 'Switch to average',
+          'meter.switchToPeak': 'Switch to peak',
+          'meter.historyTitle': 'View traffic history',
+          'meter.settingsTitle': 'Settings',
+          'meter.openSettings': 'Open settings',
+          'meter.saved': 'Tile positions saved',
+          'settings.controller': 'External controller',
+          'settings.lede': 'Reads active connections from the proxy controller and aggregates download, upload speed and local totals per domain.',
+          'settings.controllerBlock': 'External controller settings',
+          'settings.enable': 'Enable external controller',
+          'settings.enableHint': 'Connect to the local proxy controller API',
+          'settings.address': 'Controller listen address',
+          'settings.hideAddress': 'Hide listen address',
+          'settings.showAddress': 'Show listen address',
+          'settings.secret': 'API access key',
+          'settings.showSecret': 'Show access key',
+          'settings.hideSecret': 'Hide access key',
+          'settings.secretNote': 'The key is encrypted with the current Windows user credential; leave it empty after a restart to keep using it.',
+          'settings.secretNoteSaved': 'The key is encrypted with the current Windows user credential; no need to re-enter it after a restart.',
+          'settings.secretPersistFailed': 'The key could not be stored securely',
+          'settings.secretPlaceholder': 'set-your-secret',
+          'settings.secretPlaceholderSaved': 'Saved securely, leave empty to keep',
+          'settings.statusWaiting': 'Waiting for configuration',
+          'settings.proxyApp': 'Proxy software',
+          'settings.proxyAppPlaceholder': 'e.g. Clash Verge',
+          'settings.domains': 'Domains or URLs to watch',
+          'settings.domainsPlaceholder': 'One per line, e.g.:\nexample.com\napi.example.com',
+          'settings.domainsHint': 'Each domain gets its own tile; subdomains are matched too.',
+          'settings.retention': 'History retention',
+          'settings.retention7': '7 days',
+          'settings.retention30': '30 days',
+          'settings.retentionForever': 'Forever',
+          'settings.avgWindow': 'Average speed window',
+          'settings.window2': 'Last 2 minutes',
+          'settings.window5': 'Last 5 minutes',
+          'settings.window10': 'Last 10 minutes',
+          'settings.avgWindowHint': 'Average = bytes in the window ÷ seconds with traffic; download and upload are counted separately and idle seconds are excluded. A direction without traffic in the window shows “—”. The peak uses the highest single sample in the same window and falls back as soon as that sample leaves it.',
+          'settings.language': 'Interface language',
+          'settings.languageHint': 'Applies immediately; the settings window and the floating tiles share the same choice.',
+          'settings.lightTheme': 'Light tiles',
+          'settings.spec': 'The look follows the reference: a compact dark window with download/upload columns and average/total rows. Sizes follow the reference for now; tile data comes from controller connection stats, not from active speed tests.',
+          'settings.saveNote': 'Settings are stored in this browser; the API key is encrypted with Windows credentials.',
+          'settings.saveNoteSaved': 'Settings saved; the API key is encrypted with Windows credentials',
+          'settings.saveNoteUnavailable': 'Local storage is not available in this browser.',
+          'action.cancel': 'Cancel',
+          'action.save': 'Save',
+          'action.close': 'Close',
+          'action.copySummary': 'Copy requirement summary',
+          'summary.label': 'Requirement summary',
+          'summary.title': 'NetMeter requirements:',
+          'summary.point1': '- Reads real connection traffic for the given domains from a local proxy controller; it does not run active speed tests.',
+          'summary.point2': '- Matches the reference look: one compact dark floating tile (~180×148) per domain showing download/upload speed, average and totals; click a domain to open history.',
+          'summary.address': '- Controller address: ',
+          'summary.proxyApp': '- Proxy software: ',
+          'summary.domains': '- Domains: ',
+          'summary.history': '- History retention: ',
+          'summary.avgWindow': '- Average window: {window} (counts only active seconds with traffic)',
+          'summary.pending': 'not set',
+          'summary.pendingConfirm': 'not confirmed',
+          'toast.copied': 'Requirement summary copied; the key is not included',
+          'toast.copyBlocked': 'This browser does not allow automatic copying',
+          'toast.savedKey': 'Settings saved, the key is stored securely',
+          'toast.savedNoKey': 'Settings saved, the controller is not connected yet',
+          'toast.restored': 'Restored the previously saved settings'
+        }
+      };
+      const LANGUAGE_KEY = 'netmeter-language';
+      // Option values are persisted keys, so only their visible labels are translated.
+      const SELECT_OPTION_KEYS = {
+        history: { '7天': 'settings.retention7', '30天': 'settings.retention30', '长期': 'settings.retentionForever' },
+        avgWindow: { '2分钟': 'settings.window2', '5分钟': 'settings.window5', '10分钟': 'settings.window10' }
+      };
+      let language = 'zh';
+
+      function t(key, vars) {
+        const table = I18N[language] || I18N.zh;
+        let text = table[key];
+        if (text === undefined) text = I18N.zh[key];
+        if (text === undefined) return key;
+        if (vars) Object.entries(vars).forEach(([name, value]) => { text = text.split('{' + name + '}').join(String(value)); });
+        return text;
+      }
+
+      function storedLanguage() {
+        try {
+          const saved = localStorage.getItem(LANGUAGE_KEY);
+          return saved === 'en' || saved === 'zh' ? saved : 'zh';
+        } catch {
+          return 'zh';
+        }
+      }
+
+      function applyStaticTranslations() {
+        document.querySelectorAll('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
+        document.querySelectorAll('[data-i18n-aria]').forEach(node => { node.setAttribute('aria-label', t(node.dataset.i18nAria)); });
+        document.querySelectorAll('[data-i18n-title]').forEach(node => { node.setAttribute('title', t(node.dataset.i18nTitle)); });
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(node => { node.setAttribute('placeholder', t(node.dataset.i18nPlaceholder)); });
+        Object.entries(SELECT_OPTION_KEYS).forEach(([id, options]) => {
+          const select = document.getElementById(id);
+          if (!select) return;
+          Array.from(select.options).forEach(option => {
+            const key = options[option.value];
+            if (key) option.textContent = t(key);
+          });
+        });
+        document.title = view === 'widget' ? t('app.titleWidget') : t('app.titleSettings');
+      }
+
+      const view = new URLSearchParams(location.search).get('view') === 'widget' ? 'widget' : 'settings';
+      document.body.classList.add(view === 'widget' ? 'widget-mode' : 'settings-mode');
+      document.documentElement.classList.add(view === 'widget' ? 'widget-mode' : 'settings-mode');
+      language = storedLanguage();
+      document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
+      document.body.classList.toggle('lang-en', language === 'en');
+      applyStaticTranslations();
+      const form = document.getElementById('preferences');
+      const meters = document.getElementById('meters');
+      const historyPanel = document.getElementById('historyPanel');
+      const verticalAlignmentGuide = document.getElementById('verticalAlignmentGuide');
+      const horizontalAlignmentGuide = document.getElementById('horizontalAlignmentGuide');
+      const connectionDot = document.getElementById('connectionDot');
+      const connectionStatus = document.getElementById('connectionStatus');
+      const controllerStatus = document.getElementById('controllerStatus');
+      const historySummary = document.getElementById('historySummary');
+      const historyChart = document.getElementById('historyChart');
+      const historySpeedChart = document.getElementById('historySpeedChart');
+      const historyTabs = Array.from(document.querySelectorAll('.history-tab'));
+      const fields = {
+        enabled: document.getElementById('controllerEnabled'),
+        address: document.getElementById('controllerAddress'),
+        secret: document.getElementById('controllerSecret'),
+        app: document.getElementById('proxyApp'),
+        domains: document.getElementById('domains'),
+        history: document.getElementById('history'),
+        avgWindow: document.getElementById('avgWindow'),
+        language: document.getElementById('language'),
+        theme: document.getElementById('lightTheme')
+      };
+      let lightTheme = false;
+      let saveTimer;
+      let pollTimer;
+      let pollBusy = false;
+      let lastSampleAt = 0;
+      let counters = new Map();
+      let metrics = new Map();
+      let renderedNames = null;
+      let renderedTheme = null;
+      let meterOrder = [];
+      let meterPositions = {};
+      let renderedCanvasSize = '';
+      let dragState = null;
+      let pendingDrag = null;
+      let windowDragState = null;
+      let windowScreenX = window.screenX;
+      let windowScreenY = window.screenY;
+      let ctrlHeld = false;
+      let dragWatch = null;
+      let suppressHistoryUntil = 0;
+      let suppressClickUntil = 0;
+      let savedTotals = {};
+      let lastPersistAt = 0;
+      let settingsDirty = false;
+      let historyDb;
+      let historyTab = 'traffic';
+      let historySamples = [];
+      let historyTarget = '';
+      let renderedLanguage = '';
+      // The stage status and the settings status start with different texts and
+      // only share one text once a real connection state is reported.
+      let connectionState = { kind: 'idle', stageKey: 'status.offline', statusKey: 'settings.statusWaiting', vars: null };
+      let secretConfigured = false;
+      const historyBuckets = new Map();
+
+      function readValues() {
+        return {
+          controllerEnabled: fields.enabled.checked,
+          controllerAddress: fields.address.value.trim(),
+          controllerSecret: fields.secret.value,
+          proxyApp: fields.app.value.trim(),
+          domains: fields.domains.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
+          history: fields.history.value,
+          avgWindow: fields.avgWindow.value,
+          lightTheme: fields.theme.checked
+        };
+      }
+
+      function targetNames() {
+        const names = [...new Set(readValues().domains)];
+        const available = new Set(names);
+        meterOrder = meterOrder.filter(name => available.has(name));
+        names.forEach(name => { if (!meterOrder.includes(name)) meterOrder.push(name); });
+        return [...meterOrder];
+      }
+
+      function emptyMetric() {
+        return { connected: false, downRate: 0, upRate: 0, rateMode: 'average', totalDown: 0, totalUp: 0, rateSamples: [], updatedAt: 0 };
+      }
+
+      function getMetric(name) {
+        if (!metrics.has(name)) {
+          const stored = savedTotals[name] || {};
+          metrics.set(name, { ...emptyMetric(), totalDown: Number(stored.down) || 0, totalUp: Number(stored.up) || 0 });
+        }
+        return metrics.get(name);
+      }
+
+      function formatBytes(value) {
+        if (!Number.isFinite(value) || value <= 0) return '0B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = value;
+        let index = 0;
+        while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; }
+        const decimals = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+        return size.toFixed(decimals).replace(/\.0+$/, '') + units[index];
+      }
+
+      function formatSpeed(value) { return formatBytes(value) + '/s'; }
+
+      const AVERAGE_WINDOWS = { '2分钟': 120000, '5分钟': 300000, '10分钟': 600000 };
+      const DEFAULT_AVERAGE_WINDOW = '5分钟';
+      const MAX_AVERAGE_WINDOW_MS = 600000;
+
+      function averageWindowMs() {
+        return AVERAGE_WINDOWS[fields.avgWindow.value] || AVERAGE_WINDOWS[DEFAULT_AVERAGE_WINDOW];
+      }
+
+      // A sample covers the interval [at - elapsed, at]; only samples with traffic in a
+      // given direction contribute bytes and seconds to that direction's denominator.
+      // Both the average and the peak are derived from the same window, so a peak
+      // disappears as soon as its sample slides out of the window.
+      function windowRates(samples, cutoff) {
+        let down = 0;
+        let up = 0;
+        let downSeconds = 0;
+        let upSeconds = 0;
+        let peakDown = null;
+        let peakUp = null;
+        samples.forEach(sample => {
+          if (sample.at < cutoff || !(sample.elapsed > 0)) return;
+          if (sample.down > 0) {
+            down += sample.down;
+            downSeconds += sample.elapsed;
+            const rate = sample.down / sample.elapsed;
+            peakDown = peakDown === null ? rate : Math.max(peakDown, rate);
+          }
+          if (sample.up > 0) {
+            up += sample.up;
+            upSeconds += sample.elapsed;
+            const rate = sample.up / sample.elapsed;
+            peakUp = peakUp === null ? rate : Math.max(peakUp, rate);
+          }
+        });
+        return {
+          down: downSeconds > 0 ? down / downSeconds : null,
+          up: upSeconds > 0 ? up / upSeconds : null,
+          peakDown,
+          peakUp
+        };
+      }
+
+      function trimRateSamples(samples, oldestAt) {
+        let expired = 0;
+        while (expired < samples.length && samples[expired].at < oldestAt) expired += 1;
+        if (expired) samples.splice(0, expired);
+      }
+
+      function currentRates(metric) {
+        return windowRates(metric.rateSamples, Date.now() - averageWindowMs());
+      }
+
+      function formatRate(value) { return value === null || value === undefined ? '—' : formatSpeed(value); }
+
+      function notify(text) {
+        const toast = document.getElementById('toast');
+        toast.textContent = text;
+        toast.classList.add('show');
+        clearTimeout(notify.timer);
+        notify.timer = setTimeout(() => toast.classList.remove('show'), 2400);
+      }
+
+      function setConnectionState(kind, key, vars) {
+        connectionState = { kind, stageKey: key, statusKey: key, vars: vars || null };
+        connectionDot.className = 'connection-dot ' + kind;
+        connectionStatus.textContent = t(key, vars);
+        controllerStatus.dataset.state = kind;
+        controllerStatus.textContent = t(key, vars);
+      }
+
+      function applyConnectionState() {
+        connectionDot.className = 'connection-dot ' + connectionState.kind;
+        connectionStatus.textContent = t(connectionState.stageKey, connectionState.vars);
+        controllerStatus.dataset.state = connectionState.kind;
+        controllerStatus.textContent = t(connectionState.statusKey, connectionState.vars);
+      }
+
+      function setLanguage(next) {
+        language = next === 'en' ? 'en' : 'zh';
+        document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
+        document.body.classList.toggle('lang-en', language === 'en');
+        if (fields.language) fields.language.value = language;
+        applyStaticTranslations();
+        applyConnectionState();
+        applySecretStorageState();
+        setInputVisibility(fields.address, addressVisibility, addressVisible, 'settings.hideAddress', 'settings.showAddress');
+        setInputVisibility(fields.secret, secretVisibility, secretVisible, 'settings.hideSecret', 'settings.showSecret');
+        window.netmeterDesktop?.setLanguage?.(language);
+        renderMeters();
+        if (!historyPanel.hidden) renderHistoryPanel();
+        void refreshSecretStorageState();
+      }
+
+      function saveLanguage(next) {
+        try {
+          localStorage.setItem(LANGUAGE_KEY, next === 'en' ? 'en' : 'zh');
+        } catch {
+          // Language falls back to the default when storage is unavailable.
+        }
+      }
+
+      function optionLabel(selectId, value) {
+        const key = (SELECT_OPTION_KEYS[selectId] || {})[value];
+        return key ? t(key) : value;
+      }
+
+      function persist() {
+        try {
+          const values = readValues();
+          const stored = JSON.parse(localStorage.getItem(KEY) || '{}');
+          const totals = view === 'widget' ? {} : (stored.historyTotals || {});
+          if (view === 'widget') metrics.forEach((metric, name) => { totals[name] = { down: metric.totalDown, up: metric.totalUp }; });
+          const next = view === 'widget' ? { ...stored, historyTotals: totals, layoutOrder: [...meterOrder], meterPositions } : {
+            controllerEnabled: values.controllerEnabled,
+            controllerAddress: values.controllerAddress,
+            proxyApp: values.proxyApp,
+            domains: values.domains,
+            history: values.history,
+            avgWindow: values.avgWindow,
+            lightTheme: values.lightTheme,
+            layoutOrder: stored.layoutOrder || [],
+            meterPositions: stored.meterPositions || {},
+            historyTotals: totals
+          };
+          localStorage.setItem(KEY, JSON.stringify(next));
+          const note = document.getElementById('saveNote');
+          note.textContent = t('settings.saveNoteSaved');
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => note.textContent = t('settings.saveNote'), 1600);
+          lastPersistAt = Date.now();
+        } catch {
+          document.getElementById('saveNote').textContent = t('settings.saveNoteUnavailable');
+        }
+      }
+
+      function restore() {
+        try {
+          const stored = JSON.parse(localStorage.getItem(KEY) || 'null');
+          fields.secret.value = '';
+          settingsDirty = false;
+          if (!stored) return;
+          fields.enabled.checked = stored.controllerEnabled !== false;
+          fields.address.value = stored.controllerAddress || '127.0.0.1:9097';
+          fields.app.value = stored.proxyApp || 'Clash Verge';
+          fields.domains.value = Array.isArray(stored.domains) ? stored.domains.join('\n') : '';
+          fields.history.value = ['7天', '30天', '长期'].includes(stored.history) ? stored.history : '7天';
+          fields.avgWindow.value = Object.keys(AVERAGE_WINDOWS).includes(stored.avgWindow) ? stored.avgWindow : DEFAULT_AVERAGE_WINDOW;
+          lightTheme = Boolean(stored.lightTheme);
+          fields.theme.checked = lightTheme;
+          meterOrder = Array.isArray(stored.layoutOrder) ? stored.layoutOrder.filter(name => typeof name === 'string') : [];
+          meterPositions = stored.meterPositions && typeof stored.meterPositions === 'object' ? stored.meterPositions : {};
+          savedTotals = stored.historyTotals && typeof stored.historyTotals === 'object' ? stored.historyTotals : {};
+        } catch {
+          document.getElementById('saveNote').textContent = t('settings.saveNoteUnavailable');
+        }
+      }
+
+      function sameControllerAddress(left, right) {
+        return String(left || '').replace(/^http:\/\//i, '').replace(/\/$/, '') === String(right || '').replace(/^http:\/\//i, '').replace(/\/$/, '');
+      }
+
+      async function postControllerConfig(enabled, address, secret) {
+        const response = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled, address, secret })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || 'HTTP ' + response.status);
+        if (payload.persisted === false) throw new Error(t('settings.secretPersistFailed'));
+        return payload;
+      }
+
+      async function refreshSecretStorageState() {
+        try {
+          const response = await fetch('/api/status', { cache: 'no-store' });
+          if (!response.ok) return;
+          const status = await response.json();
+          const saved = Boolean(status.configured);
+          secretConfigured = saved;
+          applySecretStorageState();
+        } catch {
+          // The normal configuration error state reports an unavailable local service.
+        }
+      }
+
+      function applySecretStorageState() {
+        fields.secret.placeholder = secretConfigured ? t('settings.secretPlaceholderSaved') : t('settings.secretPlaceholder');
+        document.getElementById('secretStorageNote').textContent = secretConfigured ? t('settings.secretNoteSaved') : t('settings.secretNote');
+      }
+
+      async function configureBackend() {
+        const values = readValues();
+        try {
+          if (!values.controllerEnabled) {
+            await postControllerConfig(false, values.controllerAddress, '');
+            return true;
+          }
+
+          if (!values.controllerSecret.trim()) {
+            const response = await fetch('/api/status', { cache: 'no-store' });
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            const status = await response.json();
+            if (!status.configured || !sameControllerAddress(status.address, values.controllerAddress)) return false;
+            if (!status.enabled) await postControllerConfig(true, values.controllerAddress, '');
+            return true;
+          }
+
+          await postControllerConfig(true, values.controllerAddress, values.controllerSecret);
+          return true;
+        } catch (error) {
+          setConnectionState('error', error && error.message === 'Failed to fetch' ? 'status.serviceDown' : 'status.configFailed', error && error.message === 'Failed to fetch' ? null : { message: error.message || t('status.configFailedDefault') });
+          return false;
+        }
+      }
+
+      function hostFromTarget(target) {
+        const raw = target.trim().toLowerCase();
+        try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : 'http://' + raw).hostname.toLowerCase(); }
+        catch { return raw.split('/')[0].split(':')[0]; }
+      }
+
+      function normalizeHost(host) {
+        return String(host || '').trim().toLowerCase().replace(/^\[|\]$/g, '').split(':')[0];
+      }
+
+      function matchesTarget(host, target) {
+        const actual = normalizeHost(host);
+        const expected = hostFromTarget(target);
+        return Boolean(actual && expected && (actual === expected || actual.endsWith('.' + expected)));
+      }
+
+      function connectionHost(connection) {
+        const metadata = connection && connection.metadata ? connection.metadata : {};
+        return metadata.host || metadata.destination || metadata.destinationIP || connection.host || connection.destination || '';
+      }
+
+      function connectionId(connection, index) {
+        return connection.id || [connection.start, connectionHost(connection), connection.metadata && connection.metadata.sourceIP, index].join('|');
+      }
+
+      function validMeterPosition(position) {
+        return position && Number.isFinite(position.x) && Number.isFinite(position.y) && position.x >= 0 && position.y >= 0;
+      }
+
+      function ensureMeterPositions(names) {
+        const next = {};
+        names.forEach((name, index) => {
+          next[name] = validMeterPosition(meterPositions[name])
+            ? { x: meterPositions[name].x, y: meterPositions[name].y }
+            : { x: 6 + (index % 2) * 188, y: 6 + Math.floor(index / 2) * 156 };
+        });
+        meterPositions = next;
+      }
+
+      function normalizeMeterLayout() {
+        const names = targetNames();
+        ensureMeterPositions(names);
+        const positions = names.map(name => meterPositions[name]).filter(Boolean);
+        if (!positions.length) return;
+        const minX = Math.min(...positions.map(position => position.x));
+        const minY = Math.min(...positions.map(position => position.y));
+        names.forEach(name => {
+          const position = meterPositions[name];
+          if (!position) return;
+          position.x = Math.max(0, position.x - minX);
+          position.y = Math.max(0, position.y - minY);
+        });
+        const right = Math.max(...names.map(name => meterPositions[name].x + 186));
+        const bottom = Math.max(...names.map(name => meterPositions[name].y + 154));
+        if (right <= Math.max(innerWidth, 760) && bottom <= Math.max(innerHeight, 560)) return;
+        names.forEach((name, index) => {
+          meterPositions[name] = { x: 6 + (index % 2) * 188, y: 6 + Math.floor(index / 2) * 156 };
+        });
+      }
+
+      function meterCanvasSize(names) {
+        if (!names.length) return { width: 192, height: 160 };
+        const right = Math.max(...names.map(name => meterPositions[name].x + 186));
+        const bottom = Math.max(...names.map(name => meterPositions[name].y + 154));
+        return { width: Math.max(192, Math.ceil(right)), height: Math.max(160, Math.ceil(bottom)) };
+      }
+
+      function applyMeterPositions() {
+        if (view !== 'widget') return;
+        meters.querySelectorAll('.meter').forEach(meter => {
+          const position = meterPositions[meter.dataset.host];
+          if (!position) return;
+          meter.style.left = position.x + 'px';
+          meter.style.top = position.y + 'px';
+        });
+      }
+
+      async function syncWindowPosition() {
+        const actual = await window.netmeterDesktop?.windowPosition?.();
+        if (actual && Number.isFinite(actual.x) && Number.isFinite(actual.y)) {
+          windowScreenX = actual.x;
+          windowScreenY = actual.y;
+        }
+      }
+
+      function moveWindowSync(x, y) {
+        const beforeX = window.screenX;
+        const beforeY = window.screenY;
+        const area = window.screen;
+        const minX = area.availLeft - window.outerWidth + 80;
+        const maxX = area.availLeft + area.availWidth - 80;
+        const minY = area.availTop;
+        const maxY = area.availTop + area.availHeight - 40;
+        window.moveTo(
+          Math.max(minX, Math.min(maxX, Math.round(x))),
+          Math.max(minY, Math.min(maxY, Math.round(y)))
+        );
+        windowScreenX = window.screenX;
+        windowScreenY = window.screenY;
+        return { deltaX: windowScreenX - beforeX, deltaY: windowScreenY - beforeY };
+      }
+
+      function moveWidgetWindowFast(x, y) {
+        windowScreenX = Math.round(x);
+        windowScreenY = Math.round(y);
+        window.netmeterDesktop?.moveWindowFast?.(windowScreenX, windowScreenY);
+      }
+
+      function shiftOtherMeters(name, deltaX, deltaY) {
+        if (!deltaX && !deltaY) return;
+        Object.entries(meterPositions).forEach(([key, position]) => {
+          if (key === name || !position) return;
+          position.x -= deltaX;
+          position.y -= deltaY;
+        });
+        applyMeterPositions();
+      }
+
+      function tightenMeterBounds() {
+        if (view !== 'widget' || dragState || pendingDrag || windowDragState) return;
+        const names = targetNames();
+        const positions = names.map(name => meterPositions[name]).filter(Boolean);
+        if (!positions.length) return;
+        const minX = Math.min(...positions.map(position => position.x));
+        const minY = Math.min(...positions.map(position => position.y));
+        if (minX <= 0 && minY <= 0) return;
+        const moved = moveWindowSync(window.screenX + minX, window.screenY + minY);
+        names.forEach(name => {
+          const position = meterPositions[name];
+          if (!position) return;
+          position.x -= moved.deltaX;
+          position.y -= moved.deltaY;
+        });
+        applyMeterPositions();
+        persist();
+      }
+
+      function resizeWidgetToCanvas(names) {
+        if (view !== 'widget' || dragState) return;
+        const size = meterCanvasSize(names);
+        const key = size.width + 'x' + size.height;
+        if (key === renderedCanvasSize) return;
+        renderedCanvasSize = key;
+        window.netmeterDesktop?.resizeWidget(size);
+      }
+
+      function renderMeters() {
+        const names = targetNames();
+        ensureMeterPositions(names);
+        const namesKey = JSON.stringify(names);
+        if (namesKey !== renderedNames || lightTheme !== renderedTheme || language !== renderedLanguage) {
+        meters.replaceChildren(...(names.length ? names.map(createMeter) : [Object.assign(document.createElement('p'), { className: 'meter-empty', textContent: t('meter.empty') })]));
+          meters.style.gridTemplateColumns = '';
+          renderedNames = namesKey;
+          renderedTheme = lightTheme;
+          renderedLanguage = language;
+        }
+        applyMeterPositions();
+        void tightenMeterBounds();
+        resizeWidgetToCanvas(names);
+        meters.querySelectorAll('.meter').forEach(meter => updateMeter(meter, getMetric(meter.dataset.host)));
+        meters.querySelectorAll('.speed').forEach(element => {
+          element.style.fontSize = '';
+          let size = 17;
+          while (element.scrollWidth > element.clientWidth && size > 10) {
+            element.style.fontSize = --size + 'px';
+          }
+        });
+      }
+
+      function createMeter(name) {
+        const metric = getMetric(name);
+        const meter = document.createElement('article');
+        meter.className = 'meter' + (lightTheme ? ' light' : '');
+        meter.dataset.host = name;
+        meter.innerHTML = '<div class="meter-head"><span class="status-dot"></span><button class="host-button" type="button" title="' + t('meter.historyTitle') + '"></button><button class="settings-button" type="button" title="' + t('meter.settingsTitle') + '" aria-label="' + t('meter.openSettings') + '">⚙</button></div>' +
+          '<div class="rates"><div class="rate"><div class="rate-label">' + arrowMarkup('down') + t('meter.down') + '</div><strong class="speed down"></strong></div><div class="rate"><div class="rate-label">' + arrowMarkup('up') + t('meter.up') + '</div><strong class="speed up"></strong></div></div>' +
+          '<div class="stat"><button class="mode-toggle" type="button"></button><span class="stat-value">' + arrowMarkup('down') + '<span class="average-down"></span></span><span class="stat-value">' + arrowMarkup('up') + '<span class="average-up"></span></span></div>' +
+          '<div class="stat"><span class="stat-name">' + t('meter.total') + '</span><span class="stat-value">' + arrowMarkup('down') + '<span class="total-down"></span></span><span class="stat-value">' + arrowMarkup('up') + '<span class="total-up"></span></span></div>';
+        meter.querySelector('.host-button').textContent = name;
+        meter.querySelector('.host-button').addEventListener('click', () => {
+          if (Date.now() < suppressHistoryUntil) return;
+          showHistory(name);
+        });
+        meter.querySelector('.settings-button').addEventListener('click', () => {
+          if (window.netmeterDesktop) window.netmeterDesktop.openSettings();
+          else location.assign('/?view=settings');
+        });
+        meter.querySelector('.mode-toggle').addEventListener('click', () => {
+          metric.rateMode = metric.rateMode === 'peak' ? 'average' : 'peak';
+          updateRateMode(meter, metric);
+        });
+        meter.addEventListener('click', event => {
+          if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopPropagation(); }
+        }, true);
+        meter.addEventListener('pointerdown', startMeterMove);
+        return meter;
+      }
+
+      function updateMeter(meter, metric) {
+        meter.querySelector('.status-dot').classList.toggle('active', metric.connected);
+        meter.querySelector('.speed.down').textContent = formatSpeed(metric.downRate);
+        meter.querySelector('.speed.up').textContent = formatSpeed(metric.upRate);
+        meter.querySelector('.total-down').textContent = formatBytes(metric.totalDown);
+        meter.querySelector('.total-up').textContent = formatBytes(metric.totalUp);
+        updateRateMode(meter, metric);
+      }
+
+      function arrowMarkup(direction) {
+        const path = direction === 'down' ? 'M6 2v16M2 14l4 4 4-4' : 'M6 18V2M2 6l4-4 4 4';
+        return '<svg class="arrow ' + direction + '" viewBox="0 0 12 20" aria-hidden="true"><path d="' + path + '"></path></svg>';
+      }
+
+      function updateRateMode(meter, metric) {
+        const peakMode = metric.rateMode === 'peak';
+        const toggle = meter.querySelector('.mode-toggle');
+        toggle.textContent = peakMode ? t('meter.modePeak') : t('meter.modeAverage');
+        toggle.title = peakMode ? t('meter.switchToAverage') : t('meter.switchToPeak');
+        toggle.setAttribute('aria-label', peakMode ? t('meter.modePeak') : t('meter.modeAverage'));
+        toggle.setAttribute('aria-pressed', String(peakMode));
+        const rates = currentRates(metric);
+        meter.querySelector('.average-down').textContent = formatRate(peakMode ? rates.peakDown : rates.down);
+        meter.querySelector('.average-up').textContent = formatRate(peakMode ? rates.peakUp : rates.up);
+      }
+
+      function startMeterMove(event) {
+        if (view !== 'widget' || event.button !== 0) return;
+        const meter = event.currentTarget;
+        const position = meterPositions[meter.dataset.host];
+        if (!position) return;
+        void syncWindowPosition();
+        const rect = meter.getBoundingClientRect();
+        const container = meters.getBoundingClientRect();
+        pendingDrag = {
+          meter,
+          name: meter.dataset.host,
+          pointerId: event.pointerId,
+          single: event.ctrlKey || ctrlHeld,
+          grabOffsetX: event.clientX - rect.left,
+          grabOffsetY: event.clientY - rect.top,
+          containerLeft: container.left,
+          containerTop: container.top,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startScreenX: event.screenX,
+          startScreenY: event.screenY,
+          baseWindowX: windowScreenX,
+          baseWindowY: windowScreenY,
+          positions: JSON.parse(JSON.stringify(meterPositions)),
+          panX: 0,
+          panY: 0,
+          originX: position.x,
+          originY: position.y,
+          canvasWidth: Math.max(innerWidth, 760),
+          canvasHeight: Math.max(innerHeight, 560)
+        };
+      }
+
+      function beginSingleDragFromWindow(event) {
+        const gesture = windowDragState;
+        windowDragState = null;
+        document.body.classList.remove('window-dragging');
+        const meter = gesture.meter;
+        const name = meter.dataset.host;
+        const position = meterPositions[name];
+        if (!position) return;
+        const rect = meter.getBoundingClientRect();
+        const container = meters.getBoundingClientRect();
+        dragState = {
+          meter,
+          name,
+          pointerId: event.pointerId,
+          single: true,
+          grabOffsetX: event.clientX - rect.left,
+          grabOffsetY: event.clientY - rect.top,
+          containerLeft: container.left,
+          containerTop: container.top,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startScreenX: event.screenX,
+          startScreenY: event.screenY,
+          baseWindowX: windowScreenX,
+          baseWindowY: windowScreenY,
+          positions: JSON.parse(JSON.stringify(meterPositions)),
+          panX: 0,
+          panY: 0,
+          originX: position.x,
+          originY: position.y,
+          canvasWidth: Math.max(innerWidth, 760),
+          canvasHeight: Math.max(innerHeight, 560)
+        };
+        meter.classList.add('dragging');
+        meter.style.zIndex = '20';
+        document.body.classList.add('dragging');
+        startDragWatch(name);
+        applyMeterDrag(event);
+      }
+
+      function nearestAlignment(value, values) {
+        let best = null;
+        for (const candidate of values) {
+          const distance = Math.abs(value - candidate);
+          if (distance <= 8 && (best === null || distance < best.distance)) best = { value: candidate, distance };
+        }
+        return best?.value ?? null;
+      }
+
+      function settleMeterPosition(rawX, rawY) {
+        // 独立拖动：落点就是指针位置，邻近方格只用于对齐参考线，不得改写坐标。
+        return { x: rawX, y: rawY };
+      }
+
+      function startDragWatch(name) {
+        stopDragWatch();
+        const watch = { name, baseline: null, hits: [], raf: 0 };
+        const loop = () => {
+          if (dragWatch !== watch) return;
+          const current = new Map();
+          meters.querySelectorAll('.meter').forEach(meter => {
+            if (meter.dataset.host === name) return;
+            const rect = meter.getBoundingClientRect();
+            current.set(meter.dataset.host, { x: Math.round(window.screenX + rect.left), y: Math.round(window.screenY + rect.top) });
+          });
+          if (!watch.baseline) watch.baseline = current;
+          else current.forEach((position, host) => {
+            const base = watch.baseline.get(host);
+            if (base && (Math.abs(position.x - base.x) > 1 || Math.abs(position.y - base.y) > 1)) {
+              watch.hits.push({ host, from: base, to: position });
+            }
+          });
+          watch.raf = requestAnimationFrame(loop);
+        };
+        dragWatch = watch;
+        watch.raf = requestAnimationFrame(loop);
+      }
+
+      function stopDragWatch() {
+        if (!dragWatch) return;
+        cancelAnimationFrame(dragWatch.raf);
+        if (dragWatch.hits.length) {
+          window.netmeterDesktop?.writeDragDiagnostics?.({
+            at: new Date().toISOString(),
+            dpr: window.devicePixelRatio,
+            viewport: { width: innerWidth, height: innerHeight },
+            window: { x: window.screenX, y: window.screenY },
+            hits: dragWatch.hits.slice(0, 40)
+          });
+        }
+        dragWatch = null;
+      }
+
+      function clearAlignmentGuides() {
+        verticalAlignmentGuide.classList.remove('show');
+        horizontalAlignmentGuide.classList.remove('show');
+      }
+
+      function applyMeterDrag(event) {
+        let positionX = event.clientX - dragState.grabOffsetX - dragState.containerLeft;
+        let positionY = event.clientY - dragState.grabOffsetY - dragState.containerTop;
+        if (positionX < 0) {
+          const moved = moveWindowSync(window.screenX + positionX, window.screenY);
+          shiftOtherMeters(dragState.name, moved.deltaX, moved.deltaY);
+          positionX = 0;
+        }
+        if (positionY < 0) {
+          const moved = moveWindowSync(window.screenX, window.screenY + positionY);
+          shiftOtherMeters(dragState.name, moved.deltaX, moved.deltaY);
+          positionY = 0;
+        }
+        const otherPositions = Object.entries(meterPositions).filter(([name]) => name !== dragState.name).map(([, position]) => position);
+        const wantedWidth = Math.max(positionX + 186, innerWidth, ...otherPositions.map(position => position.x + 186));
+        const wantedHeight = Math.max(positionY + 154, innerHeight, ...otherPositions.map(position => position.y + 154));
+        if (wantedWidth > dragState.canvasWidth || wantedHeight > dragState.canvasHeight) {
+          dragState.canvasWidth = wantedWidth;
+          dragState.canvasHeight = wantedHeight;
+          window.netmeterDesktop?.resizeWidget({ width: wantedWidth, height: wantedHeight });
+        }
+        const limitX = Math.max(0, dragState.canvasWidth - 186);
+        const limitY = Math.max(0, dragState.canvasHeight - 154);
+        positionX = Math.min(positionX, limitX);
+        positionY = Math.min(positionY, limitY);
+        const alignedX = nearestAlignment(positionX, otherPositions.map(position => position.x));
+        const alignedY = nearestAlignment(positionY, otherPositions.map(position => position.y));
+        if (alignedX !== null) {
+          verticalAlignmentGuide.style.left = alignedX + 'px';
+          verticalAlignmentGuide.classList.add('show');
+        } else {
+          verticalAlignmentGuide.classList.remove('show');
+        }
+        if (alignedY !== null) {
+          horizontalAlignmentGuide.style.top = alignedY + 'px';
+          horizontalAlignmentGuide.classList.add('show');
+        } else {
+          horizontalAlignmentGuide.classList.remove('show');
+        }
+        const position = { x: positionX, y: positionY };
+        meterPositions[dragState.name] = position;
+        dragState.meter.style.left = position.x + 'px';
+        dragState.meter.style.top = position.y + 'px';
+      }
+
+      function moveMeter(event) {
+        if (windowDragState && event.pointerId === windowDragState.pointerId) {
+          event.preventDefault();
+          if (windowDragState.single) {
+            beginSingleDragFromWindow(event);
+            return;
+          }
+          const x = windowDragState.windowScreenX + (event.screenX - windowDragState.pointerScreenX);
+          const y = windowDragState.windowScreenY + (event.screenY - windowDragState.pointerScreenY);
+          moveWidgetWindowFast(x, y);
+          return;
+        }
+        if (dragState) {
+          if (event.pointerId !== dragState.pointerId) return;
+          event.preventDefault();
+          applyMeterDrag(event);
+          return;
+        }
+        if (!pendingDrag || event.pointerId !== pendingDrag.pointerId) return;
+        const offsetX = event.clientX - pendingDrag.startClientX;
+        const offsetY = event.clientY - pendingDrag.startClientY;
+        if (Math.abs(offsetX) < 4 && Math.abs(offsetY) < 4) return;
+        const gesture = pendingDrag;
+        pendingDrag = null;
+        event.preventDefault();
+        gesture.meter.setPointerCapture?.(gesture.pointerId);
+        suppressClickUntil = Date.now() + 500;
+        if (gesture.single) {
+          dragState = gesture;
+          dragState.meter.classList.add('dragging');
+          dragState.meter.style.zIndex = '20';
+          startDragWatch(dragState.name);
+          document.body.classList.add('dragging');
+          window.netmeterDesktop?.resizeWidget({ width: dragState.canvasWidth, height: dragState.canvasHeight });
+          applyMeterDrag(event);
+          return;
+        }
+        windowDragState = { meter: gesture.meter, pointerId: gesture.pointerId, pointerScreenX: gesture.startScreenX, pointerScreenY: gesture.startScreenY, windowScreenX: gesture.baseWindowX, windowScreenY: gesture.baseWindowY };
+        document.body.classList.add('window-dragging');
+      }
+
+      async function finishMeterMove(event) {
+        if (windowDragState && event.pointerId === windowDragState.pointerId) {
+          if (windowDragState.meter.hasPointerCapture?.(event.pointerId)) windowDragState.meter.releasePointerCapture(event.pointerId);
+          windowDragState = null;
+          document.body.classList.remove('window-dragging');
+          return;
+        }
+        if (pendingDrag && event.pointerId === pendingDrag.pointerId) {
+          pendingDrag = null;
+          return;
+        }
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        if (dragState.meter.hasPointerCapture?.(event.pointerId)) dragState.meter.releasePointerCapture(event.pointerId);
+        const raw = meterPositions[dragState.name];
+        const settled = settleMeterPosition(raw.x, raw.y);
+        meterPositions[dragState.name] = settled;
+        dragState.meter.style.left = settled.x + 'px';
+        dragState.meter.style.top = settled.y + 'px';
+        dragState.meter.classList.remove('dragging');
+        dragState.meter.style.zIndex = '';
+        dragState = null;
+        document.body.classList.remove('dragging');
+        clearAlignmentGuides();
+        stopDragWatch();
+        tightenMeterBounds();
+        const size = meterCanvasSize(targetNames());
+        renderedCanvasSize = size.width + 'x' + size.height;
+        window.netmeterDesktop?.resizeWidget(size);
+        persist();
+        suppressHistoryUntil = Date.now() + 300;
+        suppressClickUntil = Date.now() + 300;
+        notify(t('meter.saved'));
+      }
+
+      async function cancelMeterMove(event) {
+        if (windowDragState && event.pointerId === windowDragState.pointerId) {
+          if (windowDragState.meter.hasPointerCapture?.(event.pointerId)) windowDragState.meter.releasePointerCapture(event.pointerId);
+          windowDragState = null;
+          document.body.classList.remove('window-dragging');
+          return;
+        }
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        const meter = dragState.meter;
+        if (meter.hasPointerCapture?.(event.pointerId)) meter.releasePointerCapture(event.pointerId);
+        meter.classList.remove('dragging');
+        meter.style.zIndex = '';
+        const snapshot = dragState.positions;
+        const baseX = dragState.baseWindowX;
+        const baseY = dragState.baseWindowY;
+        if (snapshot) {
+          Object.entries(snapshot).forEach(([name, position]) => {
+            meterPositions[name] = { x: position.x, y: position.y };
+          });
+        }
+        dragState = null;
+        applyMeterPositions();
+        moveWindowSync(baseX, baseY);
+        document.body.classList.remove('dragging');
+        clearAlignmentGuides();
+        stopDragWatch();
+        const size = meterCanvasSize(targetNames());
+        renderedCanvasSize = size.width + 'x' + size.height;
+        window.netmeterDesktop?.resizeWidget(size);
+      }
+
+      function showHistory(name) {
+        const metric = getMetric(name);
+        const rates = currentRates(metric);
+        historyTarget = name;
+        historyTab = 'traffic';
+        document.getElementById('dialogTitle').textContent = name;
+        renderHistorySummary(metric, rates);
+        historyChart.replaceChildren();
+        historySpeedChart.replaceChildren();
+        historyTabs.forEach(button => {
+          const selected = button.dataset.tab === historyTab;
+          button.setAttribute('aria-selected', String(selected));
+          button.tabIndex = selected ? 0 : -1;
+        });
+        historyChart.hidden = false;
+        historySpeedChart.hidden = true;
+        historyPanel.classList.toggle('light', lightTheme);
+        historyPanel.hidden = false;
+        meters.hidden = true;
+        document.body.classList.add('history-mode');
+        loadHistory(name).then(samples => { historySamples = samples; renderHistoryTab(); });
+        window.netmeterDesktop?.historyOpen(true);
+      }
+
+      function renderHistorySummary(metric, rates) {
+        const current = rates || currentRates(metric);
+        historySummary.innerHTML = '<div class="history-item"><small>' + t('history.summaryDownTotal') + '</small><strong class="down">' + formatBytes(metric.totalDown) + '</strong></div>' +
+          '<div class="history-item"><small>' + t('history.summaryUpTotal') + '</small><strong class="up">' + formatBytes(metric.totalUp) + '</strong></div>' +
+          '<div class="history-item"><small>' + t('history.summaryDownAverage') + '</small><strong>' + formatRate(current.down) + '</strong></div>' +
+          '<div class="history-item"><small>' + t('history.summaryUpAverage') + '</small><strong>' + formatRate(current.up) + '</strong></div>';
+      }
+
+      // Re-render an open history panel so a language switch updates every label.
+      function renderHistoryPanel() {
+        if (!historyTarget) return;
+        renderHistorySummary(getMetric(historyTarget));
+        renderHistoryTab();
+      }
+
+      function closeHistory() {
+        if (historyPanel.hidden) return;
+        historyPanel.hidden = true;
+        meters.hidden = false;
+        document.body.classList.remove('history-mode');
+        window.netmeterDesktop?.historyOpen(false);
+        renderMeters();
+      }
+
+      function openHistoryDb() {
+        if (!('indexedDB' in window)) return Promise.resolve(null);
+        return new Promise(resolve => {
+          const request = indexedDB.open('netmeter-history-v1', 1);
+          request.onupgradeneeded = () => {
+            const store = request.result.createObjectStore('samples', { keyPath: 'id' });
+            store.createIndex('targetAt', ['target', 'at'], { unique: true });
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => resolve(null);
+        });
+      }
+
+      function addHistorySample(name, at, down, up, downSeconds, upSeconds) {
+        const minute = Math.floor(at / 60000) * 60000;
+        const id = name + '|' + minute;
+        const bucket = historyBuckets.get(id) || { id, target: name, at: minute, down: 0, up: 0, downSeconds: 0, upSeconds: 0 };
+        bucket.down += down;
+        bucket.up += up;
+        bucket.downSeconds += downSeconds;
+        bucket.upSeconds += upSeconds;
+        historyBuckets.set(id, bucket);
+        if (!historyDb) return;
+        const store = historyDb.transaction('samples', 'readwrite').objectStore('samples');
+        const request = store.get(id);
+        request.onsuccess = () => {
+          const saved = request.result || { id, target: name, at: minute, down: 0, up: 0, downSeconds: 0, upSeconds: 0 };
+          // 老记录没有活跃秒字段，按整分钟补齐，避免分母被低估。
+          if (!(saved.downSeconds > 0) && saved.down > 0) saved.downSeconds = 60;
+          if (!(saved.upSeconds > 0) && saved.up > 0) saved.upSeconds = 60;
+          saved.down += down;
+          saved.up += up;
+          saved.downSeconds += downSeconds;
+          saved.upSeconds += upSeconds;
+          store.put(saved);
+        };
+      }
+
+      function retentionStart() {
+        if (fields.history.value === '长期') return 0;
+        return Date.now() - (fields.history.value === '30天' ? 30 : 7) * 86400000;
+      }
+
+      function pruneHistory() {
+        if (!historyDb || fields.history.value === '长期') return;
+        const request = historyDb.transaction('samples', 'readwrite').objectStore('samples').openCursor();
+        const cutoff = retentionStart();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          if (cursor.value.at < cutoff) cursor.delete();
+          cursor.continue();
+        };
+      }
+
+      function loadHistory(name) {
+        if (!historyDb) return Promise.resolve([]);
+        return new Promise(resolve => {
+          const range = IDBKeyRange.bound([name, retentionStart()], [name, Date.now()]);
+          const request = historyDb.transaction('samples').objectStore('samples').index('targetAt').getAll(range);
+          request.onsuccess = () => resolve(request.result || []);
+          request.onerror = () => resolve([]);
+        });
+      }
+
+      function drawHistory(samples) {
+        const since = Date.now() - 24 * 60 * 60 * 1000;
+        const hours = Array.from({ length: 24 }, () => ({ down: 0, up: 0 }));
+        samples.filter(sample => sample.at >= since).forEach(sample => {
+          const index = Math.min(23, Math.floor((sample.at - since) / 3600000));
+          hours[index].down += sample.down;
+          hours[index].up += sample.up;
+        });
+        const peak = Math.max(1, ...hours.map(item => item.down + item.up));
+        historyChart.replaceChildren();
+        if (!samples.length) {
+          historyChart.innerHTML = '<span class="history-empty">' + t('history.emptyTraffic') + '</span>';
+          return;
+        }
+        hours.forEach(item => {
+          const group = document.createElement('span');
+          group.className = 'history-hour';
+          group.title = t('history.barTitle', { down: formatBytes(item.down), up: formatBytes(item.up) });
+          const down = document.createElement('span');
+          down.className = 'history-bar-down';
+          down.style.height = Math.max(item.down ? 2 : 0, item.down / peak * 100) + 'px';
+          const up = document.createElement('span');
+          up.className = 'history-bar-up';
+          up.style.height = Math.max(item.up ? 2 : 0, item.up / peak * 100) + 'px';
+          group.append(down, up);
+          historyChart.append(group);
+        });
+      }
+
+      const HISTORY_SPAN_MS = 24 * 60 * 60 * 1000;
+      const HISTORY_MINUTE_MS = 60000;
+      const HISTORY_HOUR_MINUTES = 60;
+
+      // 历史均速与方格均速同一口径：窗口内字节 ÷ 窗口内该方向有流量的秒数。
+      // 历史库按分钟保存字节与活跃秒，曲线按分钟重放所选统计窗口的均速。
+      function historySpeedSeries(samples, now, windowMs) {
+        const span = Math.max(1, Math.round(windowMs / HISTORY_MINUTE_MS));
+        const count = Math.round(HISTORY_SPAN_MS / HISTORY_MINUTE_MS);
+        const last = Math.floor(now / HISTORY_MINUTE_MS) * HISTORY_MINUTE_MS;
+        const since = last - (count - 1) * HISTORY_MINUTE_MS;
+        const byMinute = new Map();
+        (samples || []).forEach(sample => {
+          if (!sample) return;
+          const minute = Math.floor(Number(sample.at) / HISTORY_MINUTE_MS) * HISTORY_MINUTE_MS;
+          const down = Math.max(0, Number(sample.down) || 0);
+          const up = Math.max(0, Number(sample.up) || 0);
+          let bucket = byMinute.get(minute);
+          if (!bucket) {
+            bucket = { down: 0, up: 0, downSeconds: 0, upSeconds: 0 };
+            byMinute.set(minute, bucket);
+          }
+          bucket.down += down;
+          bucket.up += up;
+          bucket.downSeconds += historyActiveSeconds(sample.downSeconds, down);
+          bucket.upSeconds += historyActiveSeconds(sample.upSeconds, up);
+        });
+        const points = [];
+        for (let index = 0; index < count; index += 1) {
+          const at = since + index * HISTORY_MINUTE_MS;
+          let down = 0;
+          let up = 0;
+          let downSeconds = 0;
+          let upSeconds = 0;
+          for (let back = 0; back < span; back += 1) {
+            const bucket = byMinute.get(at - back * HISTORY_MINUTE_MS);
+            if (!bucket) continue;
+            down += bucket.down;
+            up += bucket.up;
+            downSeconds += bucket.downSeconds;
+            upSeconds += bucket.upSeconds;
+          }
+          points.push({
+            at,
+            down: downSeconds > 0 ? down / downSeconds : null,
+            up: upSeconds > 0 ? up / upSeconds : null
+          });
+        }
+        return points;
+      }
+
+      // 老历史记录没有活跃秒字段，按整分钟折算，缺失秒数时不会把速率算成 0。
+      function historyActiveSeconds(stored, bytes) {
+        if (Number.isFinite(stored) && stored > 0) return stored;
+        return bytes > 0 ? HISTORY_MINUTE_MS / 1000 : 0;
+      }
+
+      function drawHistorySpeed(samples) {
+        historySpeedChart.replaceChildren();
+        const series = historySpeedSeries(samples, Date.now(), averageWindowMs());
+        const peak = series.reduce((max, item) => Math.max(max, item.down || 0, item.up || 0), 0);
+        if (!Number.isFinite(peak) || peak <= 0) {
+          historySpeedChart.innerHTML = '<span class="history-empty">' + t('history.emptySpeed') + '</span>';
+          return;
+        }
+        const step = 100 / Math.max(1, series.length - 1);
+        const toY = value => (100 - (value / peak) * 100).toFixed(2);
+        const path = key => {
+          let drawing = false;
+          return series.map((item, index) => {
+            const value = item[key];
+            if (value === null) { drawing = false; return ''; }
+            const command = drawing ? 'L' : 'M';
+            drawing = true;
+            return command + (index * step).toFixed(2) + ' ' + toY(value);
+          }).filter(Boolean).join(' ');
+        };
+        const parts = ['<svg class="history-speed-svg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="' + t('history.curveLabel') + '">'];
+        for (let index = 0; index < series.length; index += HISTORY_HOUR_MINUTES) {
+          const slice = series.slice(index, index + HISTORY_HOUR_MINUTES);
+          const down = Math.max(...slice.map(item => item.down || 0));
+          const up = Math.max(...slice.map(item => item.up || 0));
+          const date = new Date(slice[0].at);
+          const label = String(date.getHours()).padStart(2, '0') + ':00';
+          parts.push('<rect class="history-speed-hit" x="' + (index * step).toFixed(2) + '" y="0" width="' + (HISTORY_HOUR_MINUTES * step).toFixed(2) + '" height="100"><title>' + label + ' ' + t('history.peakTitle', { down: formatRate(down), up: formatRate(up) }) + '</title></rect>');
+        }
+        parts.push('<path class="history-speed-line down" d="' + path('down') + '"></path>');
+        parts.push('<path class="history-speed-line up" d="' + path('up') + '"></path>');
+        parts.push('</svg>');
+        historySpeedChart.innerHTML = parts.join('');
+      }
+
+      function renderHistoryTab() {
+        if (historyTab === 'speed') drawHistorySpeed(historySamples);
+        else drawHistory(historySamples);
+      }
+
+      function setHistoryTab(tab) {
+        historyTab = tab === 'speed' ? 'speed' : 'traffic';
+        historyTabs.forEach(button => {
+          const selected = button.dataset.tab === historyTab;
+          button.setAttribute('aria-selected', String(selected));
+          button.tabIndex = selected ? 0 : -1;
+        });
+        historyChart.hidden = historyTab !== 'traffic';
+        historySpeedChart.hidden = historyTab !== 'speed';
+        refreshHistoryTab();
+      }
+
+      // 切换标签时重新读取一次历史，让曲线反映面板打开期间新增的样本。
+      function refreshHistoryTab() {
+        if (!historyTarget) { renderHistoryTab(); return; }
+        loadHistory(historyTarget).then(samples => { historySamples = samples; renderHistoryTab(); });
+      }
+
+      async function pollConnections() {
+        if (pollBusy || !fields.enabled.checked) return;
+        pollBusy = true;
+        try {
+          const response = await fetch('/api/connections', { cache: 'no-store' });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const payload = await response.json();
+          const list = Array.isArray(payload.connections) ? payload.connections : [];
+          const now = Date.now();
+          const elapsed = lastSampleAt ? Math.max(.1, (now - lastSampleAt) / 1000) : 1;
+          const targets = targetNames();
+          const deltas = new Map(targets.map(name => [name, { down: 0, up: 0 }]));
+          const activeTargets = new Set();
+          const nextCounters = new Map();
+          list.forEach((connection, index) => {
+            const host = connectionHost(connection);
+            const target = targets.find(name => matchesTarget(host, name));
+            if (!target) return;
+            activeTargets.add(target);
+            const id = connectionId(connection, index);
+            const down = Math.max(0, Number(connection.download) || 0);
+            const up = Math.max(0, Number(connection.upload) || 0);
+            const previous = counters.get(id);
+            const delta = deltas.get(target);
+            if (previous) {
+              delta.down += Math.max(0, down - previous.down);
+              delta.up += Math.max(0, up - previous.up);
+            }
+            nextCounters.set(id, { down, up });
+          });
+          counters = nextCounters;
+          lastSampleAt = now;
+          targets.forEach(name => {
+            const metric = getMetric(name);
+            const delta = deltas.get(name);
+            metric.connected = activeTargets.has(name);
+            metric.downRate = delta.down / elapsed;
+            metric.upRate = delta.up / elapsed;
+            metric.totalDown += delta.down;
+            metric.totalUp += delta.up;
+            metric.rateSamples.push({ at: now, down: delta.down, up: delta.up, elapsed });
+            trimRateSamples(metric.rateSamples, now - MAX_AVERAGE_WINDOW_MS);
+            metric.updatedAt = now;
+            if (delta.down || delta.up) addHistorySample(name, now, delta.down, delta.up, delta.down > 0 ? elapsed : 0, delta.up > 0 ? elapsed : 0);
+          });
+          renderMeters();
+          setConnectionState('connected', 'status.connected', { count: list.length });
+          if (now - lastPersistAt > 5000) persist();
+        } catch (error) {
+          counters = new Map();
+          lastSampleAt = 0;
+          metrics.forEach(metric => { metric.connected = false; metric.downRate = 0; metric.upRate = 0; });
+          renderMeters();
+          setConnectionState('error', 'status.connectFailed', { message: error && error.message ? error.message : 'API' });
+        } finally {
+          pollBusy = false;
+        }
+      }
+
+      async function startPolling() {
+        stopPolling();
+        if (view !== 'widget') return false;
+        counters = new Map();
+        lastSampleAt = 0;
+        if (settingsDirty) { setConnectionState('idle', 'status.dirty'); renderMeters(); return false; }
+        const configured = await configureBackend();
+        if (!fields.enabled.checked) { setConnectionState('disabled', 'status.disabled'); renderMeters(); return false; }
+        if (!configured) { setConnectionState('idle', fields.secret.value.trim() ? 'status.restoreFailed' : 'status.needSecret'); renderMeters(); return false; }
+        setConnectionState('idle', 'status.connecting');
+        pollConnections();
+        pollTimer = setInterval(pollConnections, 1000);
+        return true;
+      }
+
+      function stopPolling() {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = null;
+      }
+
+      async function copyText(text, success) {
+        try { await navigator.clipboard.writeText(text); notify(success); }
+        catch { notify(t('toast.copyBlocked')); }
+      }
+
+      function copySummary() {
+        const values = readValues();
+        const lines = [
+          t('summary.title'),
+          t('summary.point1'),
+          t('summary.point2'),
+          t('summary.address') + (values.controllerAddress || t('summary.pending')),
+          t('summary.proxyApp') + (values.proxyApp || t('summary.pendingConfirm')),
+          t('summary.domains') + (values.domains.length ? values.domains.join(language === 'en' ? ', ' : '、') : t('summary.pending')),
+          t('summary.history') + optionLabel('history', values.history),
+          t('summary.avgWindow', { window: optionLabel('avgWindow', values.avgWindow) })
+        ];
+        copyText(lines.join('\n'), t('toast.copied'));
+      }
+
+      const markSettingsDirty = event => {
+        if (event && event.target === fields.language) return;
+        settingsDirty = true;
+        stopPolling();
+        renderMeters();
+        setConnectionState('idle', 'status.dirty');
+      };
+      const eyeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
+      const eyeOffIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/></svg>';
+      const setInputVisibility = (input, button, visible, hideKey, showKey) => {
+        input.type = visible ? 'text' : 'password';
+        button.innerHTML = visible ? eyeOffIcon : eyeIcon;
+        button.title = t(visible ? hideKey : showKey);
+        button.setAttribute('aria-label', button.title);
+        button.setAttribute('aria-pressed', String(visible));
+      };
+      form.addEventListener('input', markSettingsDirty);
+      form.addEventListener('change', markSettingsDirty);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        settingsDirty = false;
+        lightTheme = fields.theme.checked;
+        persist();
+        pruneHistory();
+        const configured = await configureBackend();
+        if (configured) fields.secret.value = '';
+        await refreshSecretStorageState();
+        window.netmeterDesktop?.settingsSaved();
+        notify(configured ? t('toast.savedKey') : t('toast.savedNoKey'));
+      });
+      document.getElementById('cancelSettings').addEventListener('click', async () => { restore(); renderMeters(); await refreshSecretStorageState(); await startPolling(); notify(t('toast.restored')); });
+      let addressVisible = true;
+      let secretVisible = false;
+      const addressVisibility = document.getElementById('toggleAddressVisibility');
+      const secretVisibility = document.getElementById('toggleSecretVisibility');
+      setInputVisibility(fields.address, addressVisibility, addressVisible, 'settings.hideAddress', 'settings.showAddress');
+      setInputVisibility(fields.secret, secretVisibility, secretVisible, 'settings.hideSecret', 'settings.showSecret');
+      addressVisibility.addEventListener('click', () => { addressVisible = !addressVisible; setInputVisibility(fields.address, addressVisibility, addressVisible, 'settings.hideAddress', 'settings.showAddress'); });
+      secretVisibility.addEventListener('click', () => { secretVisible = !secretVisible; setInputVisibility(fields.secret, secretVisibility, secretVisible, 'settings.hideSecret', 'settings.showSecret'); });
+      fields.language.addEventListener('change', () => {
+        const next = fields.language.value === 'en' ? 'en' : 'zh';
+        setLanguage(next);
+        saveLanguage(next);
+      });
+      document.getElementById('copySummary').addEventListener('click', copySummary);
+      document.getElementById('closeDialog').addEventListener('click', closeHistory);
+      historyTabs.forEach(button => {
+        button.addEventListener('click', () => setHistoryTab(button.dataset.tab));
+        button.addEventListener('keydown', event => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+          event.preventDefault();
+          const index = historyTabs.indexOf(button);
+          const next = historyTabs[(index + (event.key === 'ArrowRight' ? 1 : historyTabs.length - 1)) % historyTabs.length];
+          next.focus();
+          setHistoryTab(next.dataset.tab);
+        });
+      });
+      document.addEventListener('pointermove', moveMeter);
+      document.addEventListener('pointerup', finishMeterMove);
+      document.addEventListener('pointercancel', cancelMeterMove);
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Control') {
+          ctrlHeld = true;
+          document.body.classList.add('ctrl-held');
+          if (pendingDrag) pendingDrag.single = true;
+          if (windowDragState) windowDragState.single = true;
+        }
+        if (view === 'settings' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+          event.preventDefault();
+          form.requestSubmit();
+        }
+        if (event.key === 'Escape') closeHistory();
+      });
+      document.addEventListener('keyup', event => { if (event.key === 'Control') { ctrlHeld = false; document.body.classList.remove('ctrl-held'); if (pendingDrag) pendingDrag.single = false; if (windowDragState) windowDragState.single = false; } });
+      window.addEventListener('blur', () => { ctrlHeld = false; document.body.classList.remove('ctrl-held'); pendingDrag = null; });
+      window.addEventListener('storage', event => {
+        if (event.key === LANGUAGE_KEY) {
+          const next = event.newValue === 'en' ? 'en' : 'zh';
+          if (next !== language) setLanguage(next);
+          return;
+        }
+        if (event.key !== KEY || view !== 'widget') return;
+        try {
+          const stored = JSON.parse(event.newValue || '{}');
+          fields.avgWindow.value = Object.keys(AVERAGE_WINDOWS).includes(stored.avgWindow) ? stored.avgWindow : DEFAULT_AVERAGE_WINDOW;
+          renderMeters();
+        } catch { /* another window wrote malformed settings */ }
+      });
+      restore();
+      fields.language.value = language;
+      window.netmeterDesktop?.setLanguage?.(language);
+      if (view === 'widget') normalizeMeterLayout();
+      void syncWindowPosition();
+      renderMeters();
+      refreshSecretStorageState();
+      if (view === 'widget') window.netmeterDesktop?.historyOpen(false);
+      openHistoryDb().then(database => { historyDb = database; pruneHistory(); if (view === 'widget') startPolling(); });
+    })();
+  </script>
+</body>
+</html>

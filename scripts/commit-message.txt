@@ -1,0 +1,24 @@
+feat: bilingual (zh/en) interface with history average-speed curve
+
+Add the English interface alongside the Chinese one and publish the
+project to GitHub.
+
+- index.html: shared I18N dictionary (zh/en) with a data-i18n driven
+  static translation pass and t() for dynamic strings. The interface
+  language picker lives in the settings page, applies immediately and is
+  stored under its own netmeter-language key so saving the settings never
+  overwrites it. The widget window follows the switch through the
+  storage event.
+- The dropdown values (retention, statistics window) stay stable across
+  languages; only their visible labels are translated, so history data and
+  the statistics window are identical in both locales.
+- main.mjs: localise the tray menu, the settings window title and the
+  widget window title; preload exposes setLanguage.
+- The English labels are wider, so the tile statistics row gives the label
+  column 37px instead of 30px and keeps at least 3px before the arrow.
+  The tile itself stays 180x148.
+- i18n.test.mjs (11 cases) plus scripts/i18n-probe.cjs (26 checks) cover
+  dictionary parity, placeholder handling, the language switch, the
+  cross-window sync and the label spacing.
+- scripts/screenshot-probe.cjs renders both locales and writes the
+  README images under docs/screenshots/.

@@ -1,0 +1,106 @@
+import assert from 'node:assert/strict';
+import { afterEach, test } from 'node:test';
+import { createServer } from 'node:http';
+import { createNetMeterServer } from './server.mjs';
+
+const running = [];
+
+async function listen(server) {
+  server.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  running.push(server);
+  return server.address().port;
+}
+
+async function postJson(url, value) {
+  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+}
+
+afterEach(async () => {
+  await Promise.all(running.splice(0).map(server => new Promise(resolve => server.close(resolve))));
+});
+
+test('local proxy keeps the secret in memory and forwards authenticated controller data', async () => {
+  const requests = [];
+  const savedConfigs = [];
+  const upstream = createServer((request, response) => {
+    requests.push({ path: request.url, authorization: request.headers.authorization });
+    if (request.url === '/connections') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ connections: [{ id: 'one', metadata: { host: 'example.com' }, upload: 42, download: 99 }] }));
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  const upstreamPort = await listen(upstream);
+  const app = createNetMeterServer({ projectRoot: process.cwd(), onConfigChanged: config => savedConfigs.push(config) });
+  const appPort = await listen(app);
+  const base = 'http://127.0.0.1:' + appPort;
+  const secret = 'synthetic-test-secret';
+
+  const saved = await postJson(base + '/api/config', { enabled: true, address: '127.0.0.1:' + upstreamPort, secret });
+  assert.equal(saved.status, 200);
+  const savedBody = await saved.text();
+  assert.equal(savedBody.includes(secret), false);
+
+  const proxied = await fetch(base + '/api/connections');
+  assert.equal(proxied.status, 200);
+  assert.deepEqual(await proxied.json(), { connections: [{ id: 'one', metadata: { host: 'example.com' }, upload: 42, download: 99 }] });
+  assert.deepEqual(requests, [{ path: '/connections', authorization: 'Bearer ' + secret }]);
+
+  const status = await (await fetch(base + '/api/status')).json();
+  assert.equal(status.configured, true);
+  assert.equal(JSON.stringify(status).includes(secret), false);
+  assert.deepEqual(savedConfigs[0], { enabled: true, address: '127.0.0.1:' + upstreamPort, secret });
+
+  const disabled = await postJson(base + '/api/config', { enabled: false, address: '', secret: '' });
+  assert.equal(disabled.status, 200);
+  assert.equal((await fetch(base + '/api/connections')).status, 409);
+  const disabledStatus = await (await fetch(base + '/api/status')).json();
+  assert.equal(disabledStatus.enabled, false);
+  assert.equal(disabledStatus.configured, true);
+  assert.deepEqual(savedConfigs[1], { enabled: false, address: '127.0.0.1:' + upstreamPort, secret });
+});
+
+test('controller addresses are restricted to loopback and secrets are required', async () => {
+  const app = createNetMeterServer({ projectRoot: process.cwd() });
+  const port = await listen(app);
+  const base = 'http://127.0.0.1:' + port;
+
+  const remote = await postJson(base + '/api/config', { enabled: true, address: 'https://example.com:9097', secret: 'not-used' });
+  assert.equal(remote.status, 400);
+
+  const missingSecret = await postJson(base + '/api/config', { enabled: true, address: '127.0.0.1:9097', secret: '' });
+  assert.equal(missingSecret.status, 400);
+});
+
+test('a saved disabled controller can be re-enabled without submitting the secret again', async () => {
+  const secret = 'synthetic-persisted-secret';
+  let authorization;
+  const app = createNetMeterServer({
+    projectRoot: process.cwd(),
+    initialConfig: { enabled: false, address: '127.0.0.1:9097', secret },
+    fetchImpl: async (_url, options) => {
+      authorization = options.headers.Authorization;
+      return new Response(JSON.stringify({ connections: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+  });
+  const port = await listen(app);
+  const base = 'http://127.0.0.1:' + port;
+
+  const initialStatus = await (await fetch(base + '/api/status')).json();
+  assert.equal(initialStatus.enabled, false);
+  assert.equal(initialStatus.configured, true);
+  assert.equal(JSON.stringify(initialStatus).includes(secret), false);
+
+  const enabled = await postJson(base + '/api/config', { enabled: true, address: '127.0.0.1:9097', secret: '' });
+  assert.equal(enabled.status, 200);
+  assert.equal((await enabled.json()).persisted, true);
+  assert.equal((await fetch(base + '/api/connections')).status, 200);
+  assert.equal(authorization, 'Bearer ' + secret);
+});
+

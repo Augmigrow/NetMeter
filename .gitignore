@@ -1,0 +1,11 @@
+node_modules/
+*.log
+scripts/*.png
+.neat-sync/
+.workbuddy/
+*.baiduyun.uploading.cfg
+scripts/probe-*.txt
+scripts/sanity-probe.mjs
+scripts/sanity2-probe.cjs
+scripts/moveto-probe.cjs
+scripts/drag-probe.mjs
