@@ -305,6 +305,49 @@ process.on('unhandledRejection', reason => {
   const restartedTraffic = await readTab();
   check('choosing traffic survives a widget reload', restartedTraffic.selected === 'traffic' && !restartedTraffic.trafficHidden && restartedTraffic.speedHidden && restartedTraffic.stored === 'traffic', JSON.stringify(restartedTraffic));
 
+  // Short measurable history must occupy the full plot, including real gaps.
+  const sparseMinute = await win.webContents.executeJavaScript(`(async () => {
+    document.getElementById('controllerEnabled').checked = false;
+    const db = await new Promise(resolve => {
+      const request = indexedDB.open('netmeter-history-v1', 1);
+      request.onsuccess = () => resolve(request.result);
+    });
+    const minute = Math.floor(Date.now() / 60000) * 60000;
+    const tx = db.transaction('samples', 'readwrite');
+    const store = tx.objectStore('samples');
+    store.clear();
+    for (let back = 30; back >= 0; back -= 1) {
+      if (back >= 12 && back <= 20) continue;
+      const at = minute - back * 60000;
+      store.put({ id: 'example.com|' + at, target: 'example.com', at,
+        down: 600 + back * 60, up: 300 + back * 30, downSeconds: 6, upSeconds: 3 });
+    }
+    await new Promise(resolve => { tx.oncomplete = resolve; });
+    db.close();
+    document.getElementById('historyTabSpeed').click();
+    return minute;
+  })()`);
+  await sleep(400);
+  const sparse = await win.webContents.executeJavaScript(`(() => {
+    const svg = document.querySelector('#historySpeedChart svg');
+    const box = svg.getBoundingClientRect();
+    const read = ratio => {
+      svg.dispatchEvent(new MouseEvent('mousemove', { clientX: box.left + box.width * ratio, clientY: box.top + box.height * .5, bubbles: true }));
+      const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+      return { at: Number(tip.dataset.at), down: tip.dataset.down, up: tip.dataset.up,
+        cursor: Number(svg.querySelector('.history-speed-cursor').getAttribute('x1')) };
+    };
+    return { downPath: svg.querySelector('.down').getAttribute('d'),
+      first: read(0), gap: read(.5), last: read(1), width: box.width };
+  })()`);
+  check('short history spans the full curve width', /^M0\.00 /.test(sparse.downPath) && /L100\.00 /.test(sparse.downPath) && sparse.width > 300, JSON.stringify({ path: sparse.downPath, width: sparse.width }));
+  check('full-width hover keeps the true first and last minute', sparse.first.at === sparseMinute - 30 * 60000 && sparse.last.at === sparseMinute && sparse.first.cursor === 0 && sparse.last.cursor === 100, JSON.stringify({ first: sparse.first, last: sparse.last }));
+  check('full-width history preserves internal idle gaps', (sparse.downPath.match(/M/g) || []).length === 2 && sparse.gap.down === '' && sparse.gap.up === '', JSON.stringify({ gap: sparse.gap }));
+  win.setContentSize(380, 307);
+  win.setContentSize(380, 306);
+  await sleep(300);
+  await writeFile(path.join(root, 'scripts', 'history-full-width-probe.png'), (await win.webContents.capturePage()).toPNG());
+
   // Old history has byte totals but no active seconds. Do not claim that its
   // transfer lasted a full minute; keep the traffic bars and explain the gap.
   const legacy = await win.webContents.executeJavaScript(`(async () => {

@@ -1513,11 +1513,25 @@
         return bytes > 0 ? null : 0;
       }
 
+      function historySpeedViewport(series) {
+        const hasValue = point => point.down !== null || point.up !== null;
+        const first = series.findIndex(hasValue);
+        if (first < 0) return [];
+        let last = series.length - 1;
+        while (last > first && !hasValue(series[last])) last -= 1;
+        // Only trim the empty ends; gaps inside the time range stay in place.
+        return series.slice(first, last + 1);
+      }
+
+      function historySpeedX(index, count) {
+        return count > 1 ? index * 100 / (count - 1) : 50;
+      }
+
       function drawHistorySpeed(samples) {
         historySpeedChart.replaceChildren();
         const now = Date.now();
         const windowMs = averageWindowMs();
-        const series = historySpeedSeries(samples, now, windowMs);
+        const series = historySpeedViewport(historySpeedSeries(samples, now, windowMs));
         const earliestRelevant = now - HISTORY_SPAN_MS - windowMs;
         const hasLegacy = samples.some(sample => sample.at >= earliestRelevant && (
           historyActiveSeconds(sample.downSeconds, Number(sample.down) || 0) === null ||
@@ -1528,7 +1542,6 @@
           historySpeedChart.innerHTML = '<span class="history-empty">' + t(hasLegacy ? 'history.legacySpeed' : 'history.emptySpeed') + '</span>';
           return;
         }
-        const step = 100 / Math.max(1, series.length - 1);
         const toY = value => (100 - (value / peak) * 100).toFixed(2);
         const path = key => {
           let drawing = false;
@@ -1537,7 +1550,8 @@
             if (value === null) { drawing = false; return ''; }
             const command = drawing ? 'L' : 'M';
             drawing = true;
-            return command + (index * step).toFixed(2) + ' ' + toY(value);
+            const point = historySpeedX(index, series.length).toFixed(2) + ' ' + toY(value);
+            return command + point + (command === 'M' ? ' l0 0' : '');
           }).filter(Boolean).join(' ');
         };
         const parts = ['<svg class="history-speed-svg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="' + t('history.curveLabel') + '">'];
@@ -1547,7 +1561,7 @@
         parts.push('<path class="history-speed-line up" d="' + path('up') + '"></path>');
         parts.push('</svg>');
         historySpeedChart.innerHTML = parts.join('');
-        bindHistorySpeedHover(series, step);
+        bindHistorySpeedHover(series);
         if (hasLegacy) {
           const note = document.createElement('span');
           note.className = 'history-speed-legacy-note';
@@ -1558,7 +1572,7 @@
 
       // 悬停读数就是曲线在该时刻的均速（窗口内字节 ÷ 该方向有流量的秒数），与曲线本身一致，
       // 不再用整点切片的峰值代替均速。
-      function bindHistorySpeedHover(series, step) {
+      function bindHistorySpeedHover(series) {
         const svg = historySpeedChart.querySelector('.history-speed-svg');
         const cursor = historySpeedChart.querySelector('.history-speed-cursor');
         if (!svg || !series.length) return;
@@ -1591,7 +1605,7 @@
           tip.style.left = left + 'px';
           tip.style.top = top + 'px';
           if (cursor) {
-            const x = (index * step).toFixed(2);
+            const x = historySpeedX(index, series.length).toFixed(2);
             cursor.setAttribute('x1', x);
             cursor.setAttribute('x2', x);
             cursor.setAttribute('opacity', '1');

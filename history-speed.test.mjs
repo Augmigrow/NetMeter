@@ -25,11 +25,13 @@ function loadSpeed() {
   const code = [
     extractFunction('historySpeedSeries'),
     extractFunction('historyActiveSeconds'),
+    extractFunction('historySpeedViewport'),
+    extractFunction('historySpeedX'),
     extractFunction('windowRates'),
     'const HISTORY_SPAN_MS = 24 * 60 * 60 * 1000;',
     'const HISTORY_MINUTE_MS = 60000;'
   ].join('\n');
-  return new Function(`${code}\nreturn { historySpeedSeries, historyActiveSeconds, windowRates };`)();
+  return new Function(`${code}\nreturn { historySpeedSeries, historyActiveSeconds, historySpeedViewport, historySpeedX, windowRates };`)();
 }
 
 const MINUTE = 60000;
@@ -52,6 +54,35 @@ test('the speed series covers the last 24 hours at minute resolution', () => {
   assert.equal(series.length, 24 * 60);
   assert.equal(series[series.length - 1].at <= now, true);
   assert.equal(series[0].at <= now - 23 * 60 * MINUTE, true);
+});
+
+test('recent valid history fills the display width without changing its minute values', () => {
+  const { historySpeedSeries, historySpeedViewport, historySpeedX } = loadSpeed();
+  const at = Math.floor(1700000000000 / MINUTE) * MINUTE;
+  const series = historySpeedSeries([
+    { at: at - 10 * MINUTE, down: 600, up: 0, downSeconds: 6, upSeconds: 0 },
+    { at: at - MINUTE, down: 0, up: 1200, downSeconds: 0, upSeconds: 3 }
+  ], at + 1000, 2 * MINUTE);
+  const visible = historySpeedViewport(series);
+  assert.equal(visible.length, 11);
+  assert.equal(visible[0].at, at - 10 * MINUTE);
+  assert.equal(visible.at(-1).at, at);
+  assert.equal(visible[0].down, 100);
+  assert.equal(visible.at(-1).up, 400);
+  assert.equal(historySpeedX(0, visible.length), 0);
+  assert.equal(historySpeedX(visible.length - 1, visible.length), 100);
+  assert.deepEqual(visible[4], { at: at - 6 * MINUTE, down: null, up: null });
+  assert.equal(series.length, 1440);
+});
+
+test('full-width history trims trailing idle time and handles empty or single-point data', () => {
+  const { historySpeedViewport, historySpeedX } = loadSpeed();
+  const empty = { at: 0, down: null, up: null };
+  const point = { at: MINUTE, down: 100, up: null };
+  assert.deepEqual(historySpeedViewport([]), []);
+  assert.deepEqual(historySpeedViewport([empty]), []);
+  assert.deepEqual(historySpeedViewport([empty, point, { ...empty, at: 2 * MINUTE }]), [point]);
+  assert.equal(historySpeedX(0, 1), 50);
 });
 
 test('the curve replays the same active-second average as the tiles', () => {

@@ -11,7 +11,8 @@ const path = require('node:path');
 const root = path.join(__dirname, '..');
 const probeProfile = mkdtempSync(path.join(tmpdir(), 'netmeter-screenshot-probe-'));
 app.setPath('userData', probeProfile);
-const shotsDir = path.join(root, 'docs', 'screenshots');
+const recentSpeed = process.argv.includes('--recent-speed');
+const shotsDir = recentSpeed ? path.join(root, 'scripts') : path.join(root, 'docs', 'screenshots');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const results = [];
 const errors = [];
@@ -100,9 +101,9 @@ const SEED_HISTORY = `(async () => {
   const minute = 60000;
   const now = Date.now();
   for (const target of ['github.com', 'cdn.jsdelivr.net']) {
-    for (let index = 1439; index >= 0; index -= 1) {
+    for (let index = ${recentSpeed ? 89 : 1439}; index >= 0; index -= 1) {
       const at = Math.floor((now - index * minute) / minute) * minute;
-      const wave = Math.sin(index / 110) * 0.5 + 0.5;
+      const wave = Math.sin(index / ${recentSpeed ? 9 : 110}) * 0.5 + 0.5;
       const scale = target === 'github.com' ? 1 : 0.42;
       store.put({
         id: target + '|' + at,
