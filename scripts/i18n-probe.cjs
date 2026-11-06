@@ -223,11 +223,20 @@ function readStatLayout(win) {
     return {
       label: svg ? svg.getAttribute('aria-label') : '',
       paths: document.querySelectorAll('#historySpeedChart .history-speed-line').length,
-      peakTitle: document.querySelector('#historySpeedChart .history-speed-hit title') ? document.querySelector('#historySpeedChart .history-speed-hit title').textContent : ''
+      peakText: document.getElementById('historySpeedChart').textContent.includes('peak')
     };
   })()`);
   check('the average speed curve is labelled in english', enCurve.label === 'Average speed curve for the last 24 hours' && enCurve.paths === 2, JSON.stringify(enCurve));
-  check('the curve hover hint is localised', enCurve.peakTitle.includes('Down peak') && enCurve.peakTitle.includes('Up peak'), String(enCurve.peakTitle));
+  check('the curve never reports a peak instead of the average', enCurve.peakText === false, JSON.stringify(enCurve));
+
+  const enTip = await win.webContents.executeJavaScript(`(() => {
+    const svg = document.querySelector('#historySpeedChart svg');
+    const box = svg.getBoundingClientRect();
+    svg.dispatchEvent(new MouseEvent('mousemove', { clientX: box.left + box.width * 0.5, clientY: box.top + box.height * 0.5, bubbles: true }));
+    const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+    return { hidden: tip ? tip.hidden : true, text: tip ? tip.textContent.trim() : '' };
+  })()`);
+  check('the curve hover reads the average speed', enTip.hidden === false && enTip.text.includes('Down avg') && enTip.text.includes('Up avg') && !enTip.text.includes('peak'), JSON.stringify(enTip));
 
   // Switch back to chinese and confirm the panel follows.
   await win.webContents.executeJavaScript(`(() => {

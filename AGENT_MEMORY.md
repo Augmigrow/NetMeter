@@ -27,7 +27,7 @@
 - 历史流量只由方格头部域名触发，直接替换悬浮窗内容，并使用与方格一致的整窗实色深背景，不再透出桌面；仍不使用内层 `<dialog>`、嵌套弹窗或滚动区，点击累计统计行不会打开历史。
 - 历史面板新增标签栏：「历史流量」是原有的 24 小时柱状图，「历史均速」是同窗口的 24 小时曲线图，两者共用固定 380×306 窗口，切换只换图表不换摘要。历史标题从「域名 · 历史流量」改为只写域名，视图名交给标签栏表达。
 - 「历史均速」曲线口径与方格均速完全一致：横轴是最近 24 小时的每一分钟，纵轴是当前统计窗口（2/5/10 分钟）内的均速 = 字节 ÷ 该方向有流量的秒数，下载与上传各自独立。为支持这个口径，IndexedDB 的分钟样本新增 `downSeconds`/`upSeconds` 字段记录该分钟两个方向各自的有流量秒数；老记录没有该字段时按整分钟 60 秒折算（读取侧 `historyActiveSeconds` 与写入侧 `addHistorySample` 都有兜底），不会把速率算成 0。
-- 曲线用 SVG 画在 100×100 的 viewBox 里并 `preserveAspectRatio="none"` 拉伸到图表区，`vector-effect: non-scaling-stroke` 保证描边不被拉粗；下载/上传两条曲线共用一个纵轴上限（取两者最大值），某个方向在窗口内没有流量时该段路径断开而不是画成 0。每小时一个透明 `rect` 承载 `<title>` 悬停提示，给出该小时的下载与上传均速峰值。
+- 曲线用 SVG 画在 100×100 的 viewBox 里并 `preserveAspectRatio="none"` 拉伸到图表区，`vector-effect: non-scaling-stroke` 保证描边不被拉粗；下载/上传两条曲线共用一个纵轴上限（取两者最大值），某个方向在窗口内没有流量时该段路径断开而不是画成 0。悬停提示由 `bindHistorySpeedHover` 绑定在 SVG 上：一个透明 `rect` 接收指针事件，另有 `line.history-speed-cursor` 标出光标所在分钟，提示浮层 `.history-speed-tip` 显示该分钟的下载/上传均速（与曲线点同值，`data-down`/`data-up` 暴露原始字节每秒值供测试断言）。
 - 标签栏用 `role="tablist"`/`role="tab"` + `aria-selected` + roving tabindex，左右方向键在两个标签间切换；切换标签会重新读一次 IndexedDB，让曲线反映面板打开期间新增的样本。
 - 设置页的监听地址和 API 密钥右侧为显示/隐藏按钮。设置窗和悬浮方格是同时显示、可独立操作的两个窗口；若两者重叠，设置窗会自动移动到方格旁边，不再隐藏方格；悬浮窗在画布尺寸变化后会重新避让，避免方格被设置窗盖住。
 - 设置页在已保存密钥时显示“已安全保存，留空继续使用”。留空保存会复用同地址密钥；禁用控制器不会删除密钥，更换监听地址时需重新输入。
@@ -63,6 +63,8 @@
 - Electron 45.2.1 已安装并启动过；使用独立临时用户数据写入合成测试密钥后，完成一次真实 Electron 重启，确认 `/api/status` 自动恢复为已配置，设置页显示安全保存提示，随后已清理临时测试数据。正式实例在 4174 监听。
 - UI 规范文档已按当前实现核对；后续 explicit design change 必须同步规范、项目约束和本记忆。
 - 2026-11-06 收尾复核：`npm test` 18/18 通过；`scripts/drag-probe.cjs` 15 项场景全部通过（其余方格 `othersMoved=false`、逐帧 `swings=0`、`jitter=false`；普通拖动三格同位移 +100/+80；先按鼠标再按 Ctrl 时首段位移为 0、切换后仅被拖方格移动 60px；副屏 `\\.\DISPLAY1` 下逐帧零位移）。运行中的实例 `/api/status` 返回 `enabled=true configured=true address=127.0.0.1:9097`。
+
+- 2026-11-06 修正「历史均速」悬停读数（用户指出原实现用峰值代替了均速）：原实现曲线本身画的确实是均速，但悬停提示是「每小时一个透明 `rect` + `<title>`」，标题里取的是该小时切片的 `Math.max`，于是提示显示成峰值。已改为：删掉按小时的 `<title>` 聚合读数，改为自绘悬停浮层——`.history-speed-surface` 透明 `rect` 接收指针事件，`line.history-speed-cursor` 竖直指示线跟随光标标出所在分钟，`.history-speed-tip` 浮层显示该分钟的下载/上传均速（与曲线点同值），i18n key 由 `history.peakTitle` 换成 `history.pointDown`/`history.pointUp`。规范 `UI_DESIGN_SPEC.md` 第「历史流量」节同步改写：历史曲线只报均速，不得用峰值代替，也不得按小时聚合成一个读数。回归：`scripts/history-curve-probe.cjs` 新增 4 项（悬停可见、读数等于该分钟均速、读数不等于该小时峰值、读数随位置变化），`scripts/i18n-probe.cjs` 相应把「峰值标题」断言换成「不得出现 peak」和「悬停读数是均速」两项；`scripts/screenshot-probe.cjs` 在拍「历史均速」截图前先派发一次 mousemove，让效果图里直接带出均速读数。
 
 ## 待办
 

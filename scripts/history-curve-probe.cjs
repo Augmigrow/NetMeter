@@ -180,6 +180,53 @@ process.on('unhandledRejection', reason => {
   const noNaN = !speed.downPath.includes('NaN') && !speed.upPath.includes('NaN');
   check('the curve contains no NaN coordinates', noNaN, 'down=' + speed.downPath.slice(0, 60));
 
+  // Hovering the curve must report the average speed of that minute, never the
+  // peak of the surrounding hour.
+  const hover = await win.webContents.executeJavaScript(`(async () => {
+    const svg = document.querySelector('#historySpeedChart svg');
+    const box = svg.getBoundingClientRect();
+    const read = ratio => {
+      svg.dispatchEvent(new MouseEvent('mousemove', { clientX: box.left + box.width * ratio, clientY: box.top + box.height * 0.5, bubbles: true }));
+      const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+      return { hidden: tip.hidden, text: tip.textContent.trim(), at: tip.dataset.at, down: tip.dataset.down, up: tip.dataset.up };
+    };
+    const db = await new Promise(resolve => { const request = indexedDB.open('netmeter-history-v1', 1); request.onsuccess = () => resolve(request.result); });
+    const samples = await new Promise(resolve => {
+      const out = [];
+      const request = db.transaction('samples', 'readonly').objectStore('samples').openCursor();
+      request.onsuccess = () => { const cursor = request.result; if (cursor) { out.push(cursor.value); cursor.continue(); } else resolve(out); };
+    });
+    db.close();
+    const minute = 60000;
+    const spanMinutes = 5;
+    const expected = at => {
+      const slice = samples.filter(sample => sample.at <= at && sample.at > at - spanMinutes * minute);
+      const bytes = slice.reduce((sum, sample) => sum + sample.down, 0);
+      const seconds = slice.reduce((sum, sample) => sum + (sample.downSeconds || 60), 0);
+      return seconds > 0 ? bytes / seconds : null;
+    };
+    const peakAround = at => {
+      const slice = samples.filter(sample => sample.at <= at && sample.at > at - 60 * minute);
+      return slice.reduce((max, sample) => Math.max(max, sample.down / Math.max(1, sample.downSeconds || 60)), 0);
+    };
+    const first = read(0.25);
+    const second = read(0.75);
+    return {
+      first, second,
+      expectedFirst: expected(Number(first.at)),
+      peakFirst: peakAround(Number(first.at)),
+      expectedSecond: expected(Number(second.at)),
+      peakSecond: peakAround(Number(second.at)),
+      samples: samples.length
+    };
+  })()`);
+  check('the hover readout is visible and shows the average speed', hover.first.hidden === false && hover.second.hidden === false && hover.first.down !== '' && hover.second.down !== '', JSON.stringify({ first: hover.first, second: hover.second }));
+  const matchesAverage = Math.abs(Number(hover.first.down) - hover.expectedFirst) < 1 && Math.abs(Number(hover.second.down) - hover.expectedSecond) < 1;
+  check('the hover readout equals the average speed of that minute', matchesAverage, JSON.stringify({ shown: hover.first.down, expected: hover.expectedFirst, shown2: hover.second.down, expected2: hover.expectedSecond }));
+  const differsFromPeak = Math.abs(Number(hover.first.down) - hover.peakFirst) > 1 || Math.abs(Number(hover.second.down) - hover.peakSecond) > 1;
+  check('the hover readout is not a peak value', differsFromPeak, JSON.stringify({ shown: hover.first.down, peak: hover.peakFirst, shown2: hover.second.down, peak2: hover.peakSecond }));
+  check('the hover readout is not static across the curve', hover.first.down !== hover.second.down, JSON.stringify({ first: hover.first.down, second: hover.second.down }));
+
   // The history window is a fixed 380x306; the added tab row must not push the
   // chart out of view or leave the panel overflowing.
   const layout = await win.webContents.executeJavaScript(`(() => {

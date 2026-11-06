@@ -190,9 +190,25 @@ const HISTORY_SIZE = { width: 380, height: 306 };
     check('captured the ' + language + ' traffic chart', Boolean(target), target);
     await widget.webContents.executeJavaScript(`document.getElementById('historyTabSpeed').click()`);
     await sleep(500);
+    // Hover the curve so the screenshot shows the average speed readout of the
+    // hovered minute instead of a peak value.
+    await widget.webContents.executeJavaScript(`(() => {
+      const svg = document.querySelector('#historySpeedChart svg');
+      const box = svg.getBoundingClientRect();
+      svg.dispatchEvent(new MouseEvent('mousemove', { clientX: box.left + box.width * 0.62, clientY: box.top + box.height * 0.45, bubbles: true }));
+      const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+      return tip ? tip.textContent.trim() : '';
+    })()`);
+    await sleep(400);
     target = await capture(widget, 'history-speed-' + suffix + '.png');
     check('captured the ' + language + ' average speed curve', Boolean(target), target);
   }
+
+  const hover = await widget.webContents.executeJavaScript(`(() => {
+    const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+    return { visible: Boolean(tip) && tip.hidden === false, text: tip ? tip.textContent.trim() : '', down: tip ? tip.dataset.down : '' };
+  })()`);
+  check('the captured curve shows the hovered average speed', hover.visible === true && hover.down !== '' && !/peak|峰值/i.test(hover.text), JSON.stringify(hover));
 
   const curve = await widget.webContents.executeJavaScript(`(() => {
     const chart = document.getElementById('historySpeedChart');
