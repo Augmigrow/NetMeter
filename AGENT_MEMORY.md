@@ -23,7 +23,7 @@
 - 悬浮窗始终贴紧方格外接矩形：方格整体平移到外接矩形左上角，窗口同步平移相同距离，屏幕上的位置不变，窗口内不留透明空隙（透明区域会挡住下层软件的点击）。三个以上方格时该规则同样成立。
 - 设置页保存设置时不再回写方格坐标，避免用设置页启动时的旧快照覆盖悬浮窗里刚摆好的布局。
 - 悬浮窗在屏幕上的位置保存在用户数据目录的 `widget-window.json`，窗口移动后落盘，重启后恢复并限制在可见屏幕范围内。启动时执行 `normalizeMeterLayout()`：先把整体平移到原点，若仍超过窗口可见范围则回退为两列紧凑默认布局，避免方格被拖到几千像素外后无法找回。
-- `scripts/install-start-menu.ps1` 生成开始菜单快捷方式（`NetMeter.lnk`）和 `netmeter.ico` 图标；托盘菜单“固定到开始菜单”可随时重新生成，缺失时启动也会自动补齐，窗口图标使用同一个 ico。
+- `main.mjs` 的 `ensureAppIcon()` 在窗口创建前校验随应用提供的 `assets/tray/netmeter.ico`，并覆盖用户数据目录中的旧图标；设置窗口、悬浮窗口和托盘都使用这个已更新的 `appIconPath()`。`scripts/install-start-menu.ps1` 只复制同一份 ICO 并生成 `NetMeter.lnk`，不再绘制旧波形；托盘菜单“固定到开始菜单”可重新安装，缺失时启动自动补齐。安装函数的 Promise 回调已改名，避免遮蔽路径 `resolve()`。
 - 历史流量只由方格头部域名触发，直接替换悬浮窗内容，并使用与方格一致的整窗实色深背景，不再透出桌面；仍不使用内层 `<dialog>`、嵌套弹窗或滚动区，点击累计统计行不会打开历史。
 - 历史面板新增标签栏：「历史流量」是原有的 24 小时柱状图，「历史均速」是最近 24 小时内有效时间范围铺满横轴的曲线图，两者共用固定 380×306 窗口，切换只换图表不换摘要。历史标题从「域名 · 历史流量」改为只写域名，视图名交给标签栏表达。
 - 历史标签采用“记住上次选择”，不新增设置页默认视图：首次使用是“历史流量”，切换时把 `traffic` 或 `speed` 存到独立的 `netmeter-history-tab` 本地键；关闭重开、换域名和应用重启后恢复。存储不可用时当前渲染会话仍保留选择；无效存储值回退“历史流量”。
@@ -36,11 +36,13 @@
 - 语言存放在独立的本地存储键 `netmeter-language`，不写进 `netmeter-controller-v2` 设置对象，因此保存设置不会覆盖语言。设置窗口切换语言后立即 `setLanguage()` 重绘当前窗口并 `saveLanguage()` 落盘；悬浮方格通过 `storage` 事件（`event.key === LANGUAGE_KEY`）跟随切换，`setLanguage()` 会重绘方格、已打开的历史面板和连接状态。切换语言不触发 `markSettingsDirty`，所以不会把设置标成未保存。
 - 下拉框的取值（「7 天」「30 天」「长期」「最近 2/5/10 分钟」）是本地存储用的稳定键，两种语言完全一致；`SELECT_OPTION_KEYS` 只映射「取值 → 文案键」，`applyStaticTranslations()` 按当前语言重写 option 的可见文本，取值本身不变。因此历史数据、统计窗口和已保存设置在两种语言下完全兼容。
 - 英文文案更宽，`body.lang-en .stat` 把统计行标签列从 30px 放宽到 37px、数值列收窄到 59px，方格总尺寸仍是 180×148；探针用 `Range` 量出标签文字右边缘与数值列左边缘的间距，要求中英文都 ≥3px，避免英文 “Total” 贴住方向箭头。
-- 托盘：`assets/tray/netmeter.ico`（16/20/24/32/40/48/64px），绿下载/蓝上传、深底浅轮廓。旧 SVG 原生解码为空，改 ICO 并检查非空；窗口/开始菜单图标不变。`scripts/generate-tray-icons.cjs` 从 SVG 重建 ICO/PNG 与浅深背景预览，详见 README。
+- 应用图标：`assets/tray/netmeter.ico`（16/20/24/32/40/48/64px），绿下载/蓝上传、深底浅轮廓；托盘、窗口标题栏和开始菜单快捷方式统一复用。旧 SVG 原生解码为空，已改 ICO 并检查非空；2026-11-07 补齐用户截图指出仍为旧图标的设置窗口标题栏。`scripts/generate-tray-icons.cjs` 从 SVG 重建 ICO/PNG 与浅深背景预览，详见 README。
 - Electron 主进程也做了本地化：`main.mjs` 的 `UI_STRINGS` 提供托盘菜单和设置窗口标题的中英文案，`ipcMain.on('app:language')` 收到渲染进程的 `setLanguage` 后重建托盘菜单并更新窗口标题；`preload.cjs` 暴露 `setLanguage`。
 - `scripts/screenshot-probe.cjs` 用离屏 Electron 渲染中英文两版界面并写出 `docs/screenshots/` 下的 8 张效果图（方格、历史流量柱状图、历史均速曲线、设置页，中英各一套），README 双语版引用这些图；`--recent-speed` 可生成 90 分钟合成历史到 `scripts/`，用于核验短时曲线全宽显示并更新中英文均速效果图。设置页截图按内容高度加高，让「界面语言」下拉框出现在同一张图里；方格截图用 384×162、历史截图用真实的 380×306。
 
 ## 验证
+
+- 2026-11-07 设置窗口图标补齐：`npm test` 58/58；主进程、前端内联脚本、测试、探针及 PowerShell 语法检查通过；真实 Electron 主进程隔离探针 12/12，通过原生标题栏截图目视确认中英文窗口左上角均为双箭头。正式实例已直接重启，仍已启用且已配置，用户数据目录图标与随应用提供的 ICO 一致；现有开始菜单快捷方式已刷新。未打开 GitHub 登录或桌面控制通道。
 
 - 2026-11-06 复核：`npm test` 54/54 通过，覆盖密钥不泄漏到状态响应、启用/禁用配置、对齐落位、窗口化均速与峰值、历史均速、历史标签记忆和双语字典；`index.html` 内嵌脚本及 Electron 脚本语法检查通过。正式 Electron 实例已重启并在 4174 监听，`/api/status` 返回已启用且已配置；托盘新 ICO 已随正式实例启动，服务与方格窗口正常；桌面控制报 native pipe 不存在，重试/重置无效，未目视验收真实任务栏；已检查浅深背景预览和 17/17 原生托盘测试。控制连接与实例租约已释放。
 - `layout.test.mjs` 从 `index.html` 直接取出 `nearestAlignment` 与 `settleMeterPosition` 两个纯函数做单元测试：8px 阈值、落点保持指针位置、邻近方格不得改写坐标、拖动中位置不受对齐影响。
@@ -56,7 +58,7 @@
 - 仓库已初始化为 Git 仓库并推送到 `https://github.com/Augmigrow/NetMeter.git`（私有仓库，默认分支 `main`）。GitHub 需要走系统代理 `http://127.0.0.1:7897`，直连超时；代理配置写在仓库本地 `.git/config` 的 `http.proxy`/`https.proxy`。凭据用 Windows 凭据管理器的 GitHub oauth token，Git Credential Manager 会自动提供，不要把 token 写进文件或命令行。本仓库作者身份按兄弟仓库统一为 `Augmigrow <3123196845@qq.com>`，只在仓库本地配置。
 - `scripts/start-app.ps1` 负责重启应用：先杀掉旧的 NetMeter electron 进程，再用 `node_modules/electron/dist/electron.exe .` 启动并轮询 `http://127.0.0.1:4174/api/status` 直到就绪。Windows 下 Electron 是 GUI 子系统进程，必须先 `Remove-Item Env:ELECTRON_RUN_AS_NODE`（本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`）。`scripts/run-probe.ps1` 是通用探针启动器。
 - `scripts/drag-probe.cjs` 现有 15 项场景（含逐帧采样、远距离、不松手、整窗拖动、副屏坐标、先鼠标后 Ctrl 切换），全部通过。
-- `tray-icon.test.mjs` 4 项覆盖 PNG/ICO 格式、尺寸和入口；`scripts/tray-icon-probe.cjs` 17/17 验证像素、原生解码、Shell 注册和临时图标清理。
+- `tray-icon.test.mjs` 8 项覆盖 PNG/ICO 格式、尺寸、统一入口、旧图标更新、首次启动和快捷方式安装；`scripts/tray-icon-probe.cjs` 17/17 验证像素、原生解码、Shell 注册和临时图标清理。`scripts/window-icon-probe.cjs` 12/12 使用真实主进程和隔离临时数据验证旧图标迁移、双窗口可见、双语原生标题及绿/蓝箭头像素，并截取 `docs/screenshots/window-icon-zh.png` / `window-icon-en.png`。Windows 窗口缩略图不含原生标题栏，因此该探针通过 Electron 显示器采集后只裁取本窗口顶部，不保存其他桌面内容或控制器字段。
 - `domain-entries.test.mjs` 7 项验证迁移、显示筛选、隐藏持续采集与累计保留；独立配置的 `scripts/domain-entries-probe.cjs` 20/20 验证增删编辑、保存取消、重载记忆、全不选、中英文控件、560/440px 无溢出，并更新中英文设置页截图。
 - `history-speed.test.mjs`（13 项）测试分钟曲线、方向独立活跃秒、空闲秒排除、2/5/10 分钟窗口、跨分钟双向突发与方格 `windowRates` 定量一致、旧记录缺秒不臆造 60 秒且按方向断开、同分钟新数据合并仍保留旧记录未知秒数；另测历史标签记忆和回退、首尾裁剪后全宽映射、内部断档、单点与空集。
 - `i18n.test.mjs`（12 项）直接从 `index.html` 取出 `I18N` 字典做纯函数测试：中英键集合完全一致、没有空文案、英文文案不含中文、占位符两边一致、`t()` 能替换占位符并在缺键时回退到中文、标记里的 `data-i18n*` 钩子和 JS 里的 `t('key')` 引用都指向存在的键、语言下拉框存在且语言不写进设置对象、`setLanguage` 会重绘方格与历史面板、悬浮方格通过 `storage` 事件跟随、主进程托盘菜单与窗口标题已本地化。

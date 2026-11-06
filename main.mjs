@@ -1,6 +1,6 @@
 ﻿import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, safeStorage } from 'electron';
 import { resolve, dirname, join } from 'node:path';
-import { appendFile, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +58,18 @@ function appIconPath() {
   return join(app.getPath('userData'), 'netmeter.ico');
 }
 
+function bundledAppIconPath() {
+  return resolve(root, 'assets', 'tray', 'netmeter.ico');
+}
+
+async function ensureAppIcon() {
+  const source = bundledAppIconPath();
+  const target = appIconPath();
+  if (nativeImage.createFromPath(source).isEmpty()) throw new Error('NetMeter app icon could not be loaded');
+  await mkdir(dirname(target), { recursive: true });
+  await copyFile(source, target);
+}
+
 function startMenuShortcutPath() {
   return join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'NetMeter.lnk');
 }
@@ -92,11 +104,11 @@ function scheduleWidgetWindowStateSave() {
 }
 
 function installStartMenuShortcut() {
-  return new Promise(resolve => {
+  return new Promise(resolveResult => {
     const script = resolve(root, 'scripts', 'install-start-menu.ps1');
     const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-TargetPath', process.execPath, '-Arguments', `"${root}"`, '-WorkingDirectory', root, '-IconPath', appIconPath()], { windowsHide: true });
-    child.on('error', () => resolve(false));
-    child.on('close', code => resolve(code === 0));
+    child.on('error', () => resolveResult(false));
+    child.on('close', code => resolveResult(code === 0));
   });
 }
 
@@ -260,7 +272,7 @@ function toggleWidget() {
 }
 
 function createTray() {
-  const iconPath = resolve(root, 'assets', 'tray', 'netmeter.ico');
+  const iconPath = appIconPath();
   if (nativeImage.createFromPath(iconPath).isEmpty()) throw new Error('NetMeter tray icon could not be loaded');
   tray = new Tray(iconPath);
   tray.setToolTip('NetMeter');
@@ -377,6 +389,7 @@ ipcMain.on('app:settings-saved', event => {
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('local.netmeter.desktop');
+  await ensureAppIcon();
   await startLocalServer(await loadControllerConfig());
   widgetWindowState = await loadWidgetWindowState();
   createTray();
