@@ -1,0 +1,7 @@
+docs: record the bilingual release and the GitHub publication
+
+- AGENT_MEMORY: note the live-app language switch verification, the three
+  issues it exposed (settings status wording, secret placeholder, eye
+  button titles), the GitHub push details and the restart helper.
+- Update the pending list: the leftover probe files are cleaned up and
+  ignored, and the GitHub repository is currently private.

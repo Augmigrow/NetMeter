@@ -50,6 +50,9 @@
 - 单格拖动恢复向任意方向移动：越过窗口左/上边缘时在渲染进程调用 `window.moveTo` 同步平移窗口，并在同一个 JS 任务里对其他方格做反向补偿，窗口与方格同帧提交。真实设备诊断日志显示旧的 IPC 平移会晚一帧，导致其余方格瞬间偏移 4px；改为同步 `moveTo` 后逐帧采样零位移，同时左移不再受限。
 - 曾因清理旧代码误删 `moveWindowSync`，导致越过左边缘即抛错、方格停在边缘，表现为 `Ctrl` 拖动失效；探针现覆盖该路径，防止再次回归。
 - 单格拖动时逐帧监测其余方格屏幕位置，超过 1px 位移即写入 `%APPDATA%\netmeter\drag-diagnostics.jsonl`（超过 512KB 自动清空），便于在真实设备上取得残余联动的直接证据。
+- 2026-11-06 双语与发布收尾：`npm test` 37/37 通过（新增 `i18n.test.mjs` 12 项）；`scripts/i18n-probe.cjs` 26 项全部通过；`scripts/history-curve-probe.cjs` 14 项仍全部通过。真实 Electron 实例里手动切换语言验证过：设置页切到 English 后，悬浮方格立刻变成 Down/Up/Avg/Total，窗口标题变成 “NetMeter Controller Tiles”，切回中文后全部还原。实机验证同时暴露并修掉了三个只在真实窗口出现的问题：设置页状态行被统一成 “Not connected”（改为 stage/status 两套 key，初值分别是「未连接」和「等待保存配置」）、密钥占位符和说明在切换语言后没有跟着换（拆出 `applySecretStorageState()` 同步刷新）、眼睛按钮标题拼成 “Hidelisten address”（改为直接用整句 key，不再拼接“显示/隐藏 + 名词”）。
+- 仓库已初始化为 Git 仓库并推送到 `https://github.com/Augmigrow/NetMeter.git`（私有仓库，默认分支 `main`）。GitHub 需要走系统代理 `http://127.0.0.1:7897`，直连超时；代理配置写在仓库本地 `.git/config` 的 `http.proxy`/`https.proxy`。凭据用 Windows 凭据管理器的 GitHub oauth token，Git Credential Manager 会自动提供，不要把 token 写进文件或命令行。本仓库作者身份按兄弟仓库统一为 `Augmigrow <3123196845@qq.com>`，只在仓库本地配置。
+- `scripts/start-app.ps1` 负责重启应用：先杀掉旧的 NetMeter electron 进程，再用 `node_modules/electron/dist/electron.exe .` 启动并轮询 `http://127.0.0.1:4174/api/status` 直到就绪。Windows 下 Electron 是 GUI 子系统进程，必须先 `Remove-Item Env:ELECTRON_RUN_AS_NODE`（本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`）。`scripts/run-probe.ps1` 是通用探针启动器。
 - `scripts/drag-probe.cjs` 现有 15 项场景（含逐帧采样、远距离、不松手、整窗拖动、副屏坐标、先鼠标后 Ctrl 切换），全部通过。
 - `history-speed.test.mjs`（7 项）取出 `historySpeedSeries` 与 `historyActiveSeconds` 做纯函数测试：曲线覆盖 24 小时分钟分辨率、均速与方格同为「字节 ÷ 活跃秒」、空闲秒不进分母、下载与上传独立、窗口按选定分钟数滑出、窗口外样本被忽略、老记录缺活跃秒时按整分钟折算。
 - `i18n.test.mjs`（11 项）直接从 `index.html` 取出 `I18N` 字典做纯函数测试：中英键集合完全一致、没有空文案、英文文案不含中文、占位符两边一致、`t()` 能替换占位符并在缺键时回退到中文、标记里的 `data-i18n*` 钩子和 JS 里的 `t('key')` 引用都指向存在的键、语言下拉框存在且语言不写进设置对象、`setLanguage` 会重绘方格与历史面板、悬浮方格通过 `storage` 事件跟随、主进程托盘菜单与窗口标题已本地化。
@@ -65,4 +68,5 @@
 
 - 真实控制器密钥和目标域名需要用户在本机设置窗口输入；不要写入项目文件、日志或摘要。
 - 当前没有安装包构建、开机自启或真实代理连接验收；用户配置完成后再验证流量增量和历史曲线。
-- 项目根目录遗留探针临时文件（`.neat-syncinline-check.js`、`probe-out*.txt`、`probe-err*.txt`、`moveto-out.txt`、`moveto-err.txt`）以及 `scripts/sanity-probe.mjs`、`scripts/sanity2-probe.cjs`、`scripts/moveto-probe.cjs`、`scripts/drag-probe.mjs`（已被 `scripts/drag-probe.cjs` 取代）：这些文件未被任何脚本或文档引用，本环境的删除命令被策略拦截，尚未清理。
+- 项目根目录和 `scripts/` 下遗留的探针临时文件（`probe-out*.txt`、`probe-err*.txt`、`moveto-*.txt`、`.neat-syncinline-check.js`、`scripts/sanity-probe.mjs`、`scripts/sanity2-probe.cjs`、`scripts/moveto-probe.cjs`、`scripts/drag-probe.mjs`）已在本轮清理；`.gitignore` 里登记了对应规则，`scripts/drag-probe.mjs` 已被 `scripts/drag-probe.cjs` 取代。
+- GitHub 仓库是私有的；如果要公开，需要在仓库设置里改可见性，并复查 README 里的截图与文字是否适合公开。
