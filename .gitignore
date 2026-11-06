@@ -10,3 +10,4 @@ scripts/sanity2-probe.cjs
 scripts/moveto-probe.cjs
 scripts/drag-probe.mjs
 scripts/commit-msg*.txt
+scripts/push.ps1
