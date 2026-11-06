@@ -3,7 +3,7 @@
 ## 用户目标
 
 - Windows 上常驻一个接近托盘大小的悬浮方格。
-- 每个方格对应一个用户填写的域名或 URL，展示本机代理与该域名之间的实时下载/上传速度、均速（可点切换峰值）和累计流量。
+- 网址用可增删、直接编辑的条目列表管理，勾选后才显示对应方格；展示本机代理与该域名之间的实时下载/上传速度、均速（可点切换峰值）和累计流量。
 - 均速口径（用户确认）：按设置页选定的最近 2/5/10 分钟滑动窗口统计，分母只算「有流量的活跃秒」，下载与上传各自独立判定；窗口内该方向无流量显示「—」。默认 5 分钟。
 - 数据来自本机代理控制器活动连接的字节计数，不主动测速；外观参考用户截图，尺寸先保持紧凑，之后再调。
 
@@ -13,7 +13,7 @@
 - `server.mjs` 只监听回环地址，可接收启动时恢复的控制器配置，并代理 `/connections` 请求；禁用状态保留密钥，只停止采集。
 - `index.html` 同时支持设置视图和 `?view=widget` 悬浮视图；浏览器设置和历史仍与密钥分离，历史按分钟写入 IndexedDB。
 - `main.mjs` 使用 Electron 异步 `safeStorage` 将控制器地址、启用状态和密钥加密到当前用户的应用数据目录；密钥不进入 `localStorage`、项目文件或日志。`preload.cjs`、`package.json` 继续提供 Electron 置顶小窗、托盘显隐和设置窗口；方格不再使用 `-webkit-app-region: drag` 标题栏，普通左键整窗拖动走即时的 `widget:move-fast` IPC，`widget:move` 只用于需要返回实际位移的操作。
-- 域名按控制器连接的目标主机匹配，子域名归并；历史保留支持 7 天、30 天和长期。
+- 网址条目存为 `domainEntries: [{ url, visible }]`，兼容保留 `domains` 数组；旧字符串数组由 `normalizeDomainEntries` 迁移为全选。保存/取消沿用设置流程，空白与重复值禁止保存。`targetNames` 只返回勾选项，`trackedTargetNames` 返回全部条目供轮询；隐藏仍采集，历史与累计保留，全部不选显示空状态。新增默认勾选；删除不清历史，编辑到不同网址使用新统计目标。域名匹配包含子域名。
 - 紧凑卡片约 180×148；主速度 17px，标签 12px，统计行 13px；方向箭头用 SVG 细描边，统计行箭头略小于实时行。每秒轮询仅更新现有节点，避免替换按钮导致点击/焦点丢失。
 - 峰值与均速共用设置页选定的同一时间窗口：峰值是窗口内该方向有流量的最高单次采样速度，样本滑出窗口后自动回落，不再保留会话级峰值；均速和峰值可在各方格独立切换，切换仅在当前渲染会话保持。
 - 实现：`pollConnections` 每秒为每个域名记录一条 `{ at, down, up, elapsed }` 样本到 `metric.rateSamples`，只保留最长 10 分钟；`windowRates(samples, cutoff)` 在渲染时一次遍历按当前窗口裁剪，分别累加该方向有流量样本的字节与 `elapsed` 得到均速，同时取 `sample.down / sample.elapsed` 的最大值得到峰值；无活跃样本返回 `null`，由 `formatRate` 显示为「—」。`currentRates` 每次渲染用 `Date.now()` 重算，因此窗口过期、切换窗口、断连都会实时反映。旧的 `sessionDown/sessionUp/activeSeconds`、`metric.peakDown/peakUp` 累计和 `metric.samples` 已移除。样本只存内存，不落盘；窗口设置 `avgWindow` 存在 `localStorage` 的 `netmeter-controller-v2`，设置页保存后主进程重载悬浮窗使其生效。
@@ -41,7 +41,7 @@
 
 ## 验证
 
-- 2026-11-06 复核：`npm test` 43/43 通过，覆盖密钥不泄漏到状态响应、启用/禁用配置、对齐落位、窗口化均速与峰值、历史均速、历史标签记忆和双语字典；`index.html` 内嵌脚本及 Electron 脚本语法检查通过。正式 Electron 实例已重启并在 4174 监听，`/api/status` 返回已启用且已配置；实机历史均速已确认铺满横轴，保留历史均速面板打开供用户查看；桌面控制与实例租约已释放。
+- 2026-11-06 复核：`npm test` 50/50 通过，覆盖密钥不泄漏到状态响应、启用/禁用配置、对齐落位、窗口化均速与峰值、历史均速、历史标签记忆和双语字典；`index.html` 内嵌脚本及 Electron 脚本语法检查通过。正式 Electron 实例已重启并在 4174 监听，`/api/status` 返回已启用且已配置；实机设置页已确认旧网址迁移为可勾选编辑条目，原选择未改动；设置页保持打开供用户操作；桌面控制与实例租约已释放。
 - `layout.test.mjs` 从 `index.html` 直接取出 `nearestAlignment` 与 `settleMeterPosition` 两个纯函数做单元测试：8px 阈值、落点保持指针位置、邻近方格不得改写坐标、拖动中位置不受对齐影响。
 - `average.test.mjs`（10 项）取出 `windowRates`、`trimRateSamples`、`averageWindowMs` 做纯函数测试：均速与峰值共用窗口裁剪及边界、下载/上传各自独立分母、空闲秒排除、`elapsed` 加权、空窗返回 `null`、峰值取单次采样最大值且滑出窗口即过期、样本裁剪、2/5/10 分钟映射与默认 5 分钟，并断言会话级累计字段已移除。
 - `scripts/average-probe.cjs` 用离屏 Electron 真实窗口 + 合成控制器（下载恒定 100B/s、上传恒为 0）验证 10 项：设置页三档下拉与默认值、保存写入 `localStorage`、重载恢复、悬浮窗读到 2 分钟窗口、只有下载有流量时 `100B/s` 且上传显示「—」、停流后均速不衰减（实测 97.3B/s）、切换峰值显示窗口内峰值、把渲染器时钟快进 3 分钟后峰值与均速都回落为「—」、无脚本错误。运行需 `env -u ELECTRON_RUN_AS_NODE node_modules/electron/dist/electron.exe scripts/average-probe.cjs`；本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`，不取消会让 Electron 退化成普通 Node，且 `.mjs` 探针在当前 Electron 45 里无法解析 `electron` 具名导出，故用 `.cjs`。
@@ -55,6 +55,7 @@
 - 仓库已初始化为 Git 仓库并推送到 `https://github.com/Augmigrow/NetMeter.git`（私有仓库，默认分支 `main`）。GitHub 需要走系统代理 `http://127.0.0.1:7897`，直连超时；代理配置写在仓库本地 `.git/config` 的 `http.proxy`/`https.proxy`。凭据用 Windows 凭据管理器的 GitHub oauth token，Git Credential Manager 会自动提供，不要把 token 写进文件或命令行。本仓库作者身份按兄弟仓库统一为 `Augmigrow <3123196845@qq.com>`，只在仓库本地配置。
 - `scripts/start-app.ps1` 负责重启应用：先杀掉旧的 NetMeter electron 进程，再用 `node_modules/electron/dist/electron.exe .` 启动并轮询 `http://127.0.0.1:4174/api/status` 直到就绪。Windows 下 Electron 是 GUI 子系统进程，必须先 `Remove-Item Env:ELECTRON_RUN_AS_NODE`（本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`）。`scripts/run-probe.ps1` 是通用探针启动器。
 - `scripts/drag-probe.cjs` 现有 15 项场景（含逐帧采样、远距离、不松手、整窗拖动、副屏坐标、先鼠标后 Ctrl 切换），全部通过。
+- `domain-entries.test.mjs` 7 项验证迁移、显示筛选、隐藏持续采集与累计保留；独立配置的 `scripts/domain-entries-probe.cjs` 20/20 验证增删编辑、保存取消、重载记忆、全不选、中英文控件、560/440px 无溢出，并更新中英文设置页截图。
 - `history-speed.test.mjs`（13 项）测试分钟曲线、方向独立活跃秒、空闲秒排除、2/5/10 分钟窗口、跨分钟双向突发与方格 `windowRates` 定量一致、旧记录缺秒不臆造 60 秒且按方向断开、同分钟新数据合并仍保留旧记录未知秒数；另测历史标签记忆和回退、首尾裁剪后全宽映射、内部断档、单点与空集。
 - `i18n.test.mjs`（12 项）直接从 `index.html` 取出 `I18N` 字典做纯函数测试：中英键集合完全一致、没有空文案、英文文案不含中文、占位符两边一致、`t()` 能替换占位符并在缺键时回退到中文、标记里的 `data-i18n*` 钩子和 JS 里的 `t('key')` 引用都指向存在的键、语言下拉框存在且语言不写进设置对象、`setLanguage` 会重绘方格与历史面板、悬浮方格通过 `storage` 事件跟随、主进程托盘菜单与窗口标题已本地化。
 - `scripts/i18n-probe.cjs` 用离屏 Electron 真实窗口验证双语渲染与切换；最近保存的探针日志为 27/27 通过，覆盖中英文方格文案、`<html lang>`、标题与 aria 文案、语言落盘、历史面板标题与标签、摘要四列、曲线 aria-label 与悬停提示、切回中文、另一个窗口（设置页）跟随切换、下拉框显示文案翻译但取值不变、标签文字与箭头间距 ≥3px、无渲染脚本错误。

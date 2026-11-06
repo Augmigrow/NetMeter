@@ -63,7 +63,7 @@ npm start
 ## 控制器配置
 
 - 地址填写代理控制器的本机 HTTP API 地址，默认 `127.0.0.1:9097`。
-- 在 API 密钥框输入访问密钥，然后在域名框每行填写一个域名；路径不参与匹配，子域名会归并到对应方格。监听地址和密钥右侧的眼睛按钮只在显示与隐藏之间切换，不写入剪贴板。
+- 在 API 密钥框输入访问密钥；网址使用条目列表，点“+”新增、在输入框直接编辑、点“×”移除。每条左侧的复选框控制是否显示方格，保存后生效并记住选择；取消勾选仍保留条目和历史，继续采集，重新勾选即可恢复。旧网址自动迁移为已勾选条目。路径不参与匹配，子域名会归并到对应方格。监听地址和密钥右侧的眼睛按钮只在显示与隐藏之间切换，不写入剪贴板。
 - 保存后，小窗每秒读取一次控制器活动连接并比较字节计数增量，得出当前速度。控制器只提供活动连接时，连接结束前未被轮询到的最后一段流量可能无法计入。
 - 密钥不写入 `localStorage`、项目文件或日志，而是由 Electron `safeStorage` 使用 Windows 当前用户凭据加密保存。首次输入后，重启应用无需再次输入；密钥框留空会继续使用已保存值。禁用控制器不会删除已保存密钥，只有更换控制器地址时才需要重新输入。
 - 历史流量按分钟聚合到当前本机浏览器配置的 IndexedDB，可选保留 7 天、30 天或长期；新分钟样本同时记录下载与上传各自的有流量秒数，供历史均速曲线使用；旧样本可能缺少活跃秒，无法精确计算均速。详情图表展示最近 24 小时。累计总量保存在浏览器本地设置中。
@@ -86,7 +86,7 @@ node server.mjs
 npm test
 ```
 
-`npm test` 覆盖均速与峰值口径、历史曲线、拖动对齐、服务端密钥处理和双语字典一致性。离屏 Electron 探针位于 `scripts/`：`i18n-probe.cjs` 校验中英文渲染与语言切换，`screenshot-probe.cjs` 生成 `docs/screenshots/` 下的效果图，`history-curve-probe.cjs` 校验历史曲线与标签栏。
+`npm test` 覆盖均速与峰值口径、历史曲线、拖动对齐、服务端密钥处理和双语字典一致性。离屏 Electron 探针位于 `scripts/`：`i18n-probe.cjs` 校验中英文渲染与语言切换，`screenshot-probe.cjs` 生成 `docs/screenshots/` 下的效果图，`history-curve-probe.cjs` 校验历史曲线与标签栏，`domain-entries-probe.cjs` 校验网址条目的增删编辑、显示选择与重载记忆，并更新中英文设置页效果图。
 
 ---
 
@@ -124,7 +124,7 @@ The tray menu, the settings window title and the tile right-click menu follow th
 ## Controller configuration
 
 - The address is the local HTTP API address of your proxy controller; it defaults to `127.0.0.1:9097`.
-- Enter the access key in the API key box, then list one domain per line in the domains box. Paths do not participate in matching, and subdomains are folded into the matching tile. The eye buttons next to the listen address and the key only toggle between showing and hiding; they never write to the clipboard.
+- Enter the access key in the API key box. Websites are editable list entries: use “+” to add one, edit its input directly, or use “×” to remove it. The checkbox controls whether its tile is shown. Save to apply and remember the selection. Unchecked entries keep collecting traffic and retain their history; check them again to restore the tile. Existing websites migrate as checked entries. Paths do not participate in matching, and subdomains are folded into the matching tile. The eye buttons next to the listen address and the key only toggle between showing and hiding; they never write to the clipboard.
 - After saving, the small window reads the controller's active connections once per second and compares the byte counters to derive the current speed. When the controller only exposes active connections, the last stretch of traffic before a connection ends may not be counted.
 - The key is never written to `localStorage`, project files or logs. Electron's `safeStorage` encrypts it with the current Windows user credential. After the first entry the app restarts without asking again; leaving the key box empty keeps the saved value. Disabling the controller does not delete the saved key — only changing the controller address requires a new one.
 - Traffic history is aggregated per minute into the IndexedDB of the local browser profile and can be kept for 7 days, 30 days or forever. New minute samples record the active seconds of download and upload independently for the average-speed curve; older samples may lack those seconds and cannot yield an exact average. The detail chart shows the last 24 hours. Cumulative totals are kept in the browser's local settings.
@@ -147,4 +147,4 @@ Open `http://127.0.0.1:4174/`. This mode has no Windows tray and no separate alw
 npm test
 ```
 
-`npm test` covers the average and peak definitions, the history curve, drag alignment, the server-side secret handling and the consistency of the bilingual dictionary. The offscreen Electron probes live in `scripts/`: `i18n-probe.cjs` verifies the Chinese and English rendering and the language switch, `screenshot-probe.cjs` produces the images under `docs/screenshots/`, and `history-curve-probe.cjs` verifies the history curve and its tab bar.
+`npm test` covers the average and peak definitions, the history curve, drag alignment, the server-side secret handling and the consistency of the bilingual dictionary. The offscreen Electron probes live in `scripts/`: `i18n-probe.cjs` verifies the Chinese and English rendering and the language switch, `screenshot-probe.cjs` produces the images under `docs/screenshots/`, and `history-curve-probe.cjs` verifies the history curve and its tab bar, and `domain-entries-probe.cjs` checks website editing, visibility and reload persistence while updating the bilingual settings screenshots.

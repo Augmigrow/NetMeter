@@ -84,6 +84,18 @@
     .icon-button { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; color: #167cf0; background: transparent; }
     .icon-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .icon-button:hover { background: #edf5ff; }
+    .domain-list-head { display: flex; align-items: center; justify-content: space-between; min-height: 32px; }
+    .domain-list-title { color: #344941; font-size: 12px; font-weight: 700; }
+    .domain-list { display: grid; gap: 7px; min-width: 0; }
+    .domain-entry { display: grid; grid-template-columns: 18px minmax(0, 1fr) 32px; gap: 8px; align-items: center; min-width: 0; }
+    .domain-entry input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #167cf0; cursor: pointer; }
+    .domain-entry .domain-url { min-width: 0; padding: 8px 9px; }
+    .domain-entry .domain-url:invalid:not(:placeholder-shown) { border-color: #bc6842; }
+    .domain-entry .icon-button, .domain-list-head .icon-button { width: 32px; height: 32px; font-size: 21px; line-height: 1; }
+    .domain-entry .domain-remove { color: #74827b; }
+    .domain-entry .domain-remove:hover { color: #bc6842; background: #fff3ee; }
+    .domain-empty { margin: 0; padding: 8px 0; color: #74827b; font-size: 12px; }
+    .domain-entry input[type="checkbox"]:focus-visible, .domain-entry button:focus-visible, .domain-list-head button:focus-visible { outline: 2px solid #167cf0; outline-offset: 2px; }
     .controller-status { min-height: 18px; margin: -4px 0 13px; color: #74827b; font-size: 11px; }
     .controller-status[data-state="connected"] { color: #288b63; }
     .controller-status[data-state="error"] { color: #bc6842; }
@@ -197,7 +209,7 @@
           <p id="controllerStatus" class="controller-status" data-state="idle" data-i18n="settings.statusWaiting">等待保存配置</p>
         </section>
         <div class="field"><label for="proxyApp" data-i18n="settings.proxyApp">代理软件</label><input id="proxyApp" type="text" value="Clash Verge" placeholder="例如 Clash Verge" autocomplete="off" data-i18n-placeholder="settings.proxyAppPlaceholder"></div>
-        <div class="field"><label for="domains" data-i18n="settings.domains">要看的域名或 URL</label><textarea id="domains" placeholder="每行一个，例如：\nexample.com\napi.example.com" data-i18n-placeholder="settings.domainsPlaceholder"></textarea><small data-i18n="settings.domainsHint">每个域名对应一个方格；会匹配该域名及其子域名。</small></div>
+        <div class="field"><div class="domain-list-head"><span id="domainsLabel" class="domain-list-title" data-i18n="settings.domains">要看的域名或 URL</span><button id="addDomain" class="icon-button" type="button" aria-label="添加网址" title="添加网址" data-i18n-aria="settings.addDomain" data-i18n-title="settings.addDomain">+</button></div><div id="domains" class="domain-list" role="list" aria-labelledby="domainsLabel"></div><small data-i18n="settings.domainsHint">匹配该域名及其子域名。</small></div>
         <div class="field"><label for="history" data-i18n="settings.retention">历史流量保留</label><select id="history"><option value="7天">7 天</option><option value="30天">30 天</option><option value="长期">长期</option></select></div>
         <div class="field"><label for="avgWindow" data-i18n="settings.avgWindow">均速统计窗口</label><select id="avgWindow"><option value="2分钟">最近 2 分钟</option><option value="5分钟" selected>最近 5 分钟</option><option value="10分钟">最近 10 分钟</option></select><small data-i18n="settings.avgWindowHint">均速 = 窗口内的流量 ÷ 有流量的秒数；下载与上传分别计算，空闲秒不计入分母。窗口内该方向没有流量时显示「—」。峰值采用同一窗口内的最高单次速度，样本滑出窗口后自动回落。</small></div>
         <div class="field"><label for="language" data-i18n="settings.language">界面语言</label><select id="language"><option value="zh">简体中文</option><option value="en">English</option></select><small data-i18n="settings.languageHint">界面语言立即生效；设置页与悬浮方格共用同一个选择。</small></div>
@@ -248,7 +260,7 @@
           'history.curveLabel': '最近 24 小时均速曲线',
           'history.pointDown': '下载均速 {value}',
           'history.pointUp': '上传均速 {value}',
-          'meter.empty': '先在设置中添加要观察的域名',
+          'meter.empty': '尚未选择显示的网址',
           'meter.down': '下载',
           'meter.up': '上传',
           'meter.total': '累计',
@@ -280,8 +292,15 @@
           'settings.proxyApp': '代理软件',
           'settings.proxyAppPlaceholder': '例如 Clash Verge',
           'settings.domains': '要看的域名或 URL',
-          'settings.domainsPlaceholder': '每行一个，例如：\nexample.com\napi.example.com',
-          'settings.domainsHint': '每个域名对应一个方格；会匹配该域名及其子域名。',
+          'settings.domainsPlaceholder': 'example.com 或 https://example.com',
+          'settings.domainsHint': '匹配该域名及其子域名。',
+          'settings.addDomain': '添加网址',
+          'settings.removeDomain': '移除网址 {index}',
+          'settings.domainEntry': '网址 {index}',
+          'settings.domainVisible': '显示网址 {index} 的方格',
+          'settings.domainsEmpty': '暂无网址',
+          'settings.duplicateDomain': '该网址已存在',
+          'settings.domainRequired': '请填写网址',
           'settings.retention': '历史流量保留',
           'settings.retention7': '7 天',
           'settings.retention30': '30 天',
@@ -351,7 +370,7 @@
           'history.curveLabel': 'Average speed curve for the last 24 hours',
           'history.pointDown': 'Down avg {value}',
           'history.pointUp': 'Up avg {value}',
-          'meter.empty': 'Add a domain to watch in Settings first',
+          'meter.empty': 'No websites selected for display',
           'meter.down': 'Down',
           'meter.up': 'Up',
           'meter.total': 'Total',
@@ -383,8 +402,15 @@
           'settings.proxyApp': 'Proxy software',
           'settings.proxyAppPlaceholder': 'e.g. Clash Verge',
           'settings.domains': 'Domains or URLs to watch',
-          'settings.domainsPlaceholder': 'One per line, e.g.:\nexample.com\napi.example.com',
-          'settings.domainsHint': 'Each domain gets its own tile; subdomains are matched too.',
+          'settings.domainsPlaceholder': 'example.com or https://example.com',
+          'settings.domainsHint': 'Matches this domain and its subdomains.',
+          'settings.addDomain': 'Add website',
+          'settings.removeDomain': 'Remove website {index}',
+          'settings.domainEntry': 'Website {index}',
+          'settings.domainVisible': 'Show tile for website {index}',
+          'settings.domainsEmpty': 'No websites yet',
+          'settings.duplicateDomain': 'This website already exists',
+          'settings.domainRequired': 'Enter a website',
           'settings.retention': 'History retention',
           'settings.retention7': '7 days',
           'settings.retention30': '30 days',
@@ -538,13 +564,98 @@
       let secretConfigured = false;
       const historyBuckets = new Map();
 
+      function normalizeDomainEntries(stored) {
+        const source = Array.isArray(stored?.domainEntries) ? stored.domainEntries : (stored?.domains || []);
+        const entries = new Map();
+        if (!Array.isArray(source)) return [];
+        source.forEach(value => {
+          const url = (typeof value === 'string' ? value : value?.url);
+          if (typeof url !== 'string' || !url.trim()) return;
+          const name = url.trim();
+          const visible = typeof value === 'string' || value.visible !== false;
+          const previous = entries.get(name);
+          entries.set(name, { url: name, visible: visible || Boolean(previous?.visible) });
+        });
+        return [...entries.values()];
+      }
+
+      function readDomainEntries() {
+        return Array.from(fields.domains.querySelectorAll('.domain-entry'), row => ({
+          url: row.querySelector('.domain-url').value.trim(),
+          visible: row.querySelector('.domain-visible').checked
+        })).filter(entry => entry.url);
+      }
+
+      function refreshDomainLabels() {
+        const seen = new Set();
+        fields.domains.querySelectorAll('.domain-entry').forEach((row, index) => {
+          const input = row.querySelector('.domain-url');
+          input.placeholder = t('settings.domainsPlaceholder');
+          input.setAttribute('aria-label', t('settings.domainEntry', { index: index + 1 }));
+          const checkbox = row.querySelector('.domain-visible');
+          checkbox.title = t('settings.domainVisible', { index: index + 1 });
+          checkbox.setAttribute('aria-label', checkbox.title);
+          const remove = row.querySelector('.domain-remove');
+          remove.title = t('settings.removeDomain', { index: index + 1 });
+          remove.setAttribute('aria-label', remove.title);
+          const name = input.value.trim();
+          input.setCustomValidity(!name ? t('settings.domainRequired') : seen.has(name) ? t('settings.duplicateDomain') : '');
+          if (name) seen.add(name);
+        });
+        const empty = fields.domains.querySelector('.domain-empty');
+        if (empty) empty.textContent = t('settings.domainsEmpty');
+      }
+
+      function createDomainEntry(entry) {
+        const row = document.createElement('div');
+        row.className = 'domain-entry';
+        row.setAttribute('role', 'listitem');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'domain-visible';
+        checkbox.checked = entry.visible !== false;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'domain-url';
+        input.value = entry.url;
+        input.required = true;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'icon-button domain-remove';
+        remove.textContent = '×';
+        remove.addEventListener('click', () => {
+          const neighbour = row.nextElementSibling || row.previousElementSibling;
+          row.remove();
+          if (!fields.domains.querySelector('.domain-entry')) renderDomainEntries([]);
+          else refreshDomainLabels();
+          (neighbour?.querySelector('.domain-url') || document.getElementById('addDomain')).focus();
+          markSettingsDirty();
+        });
+        row.append(checkbox, input, remove);
+        return row;
+      }
+
+      function renderDomainEntries(entries) {
+        fields.domains.replaceChildren(...entries.map(createDomainEntry));
+        if (!entries.length) {
+          const empty = document.createElement('p');
+          empty.className = 'domain-empty';
+          fields.domains.append(empty);
+        }
+        refreshDomainLabels();
+      }
+
       function readValues() {
+        const domainEntries = readDomainEntries();
         return {
           controllerEnabled: fields.enabled.checked,
           controllerAddress: fields.address.value.trim(),
           controllerSecret: fields.secret.value,
           proxyApp: fields.app.value.trim(),
-          domains: fields.domains.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
+          domains: domainEntries.map(entry => entry.url),
+          domainEntries,
           history: fields.history.value,
           avgWindow: fields.avgWindow.value,
           lightTheme: fields.theme.checked
@@ -552,11 +663,17 @@
       }
 
       function targetNames() {
-        const names = [...new Set(readValues().domains)];
+        const entries = readDomainEntries();
+        const names = entries.map(entry => entry.url);
         const available = new Set(names);
+        const visible = new Set(entries.filter(entry => entry.visible).map(entry => entry.url));
         meterOrder = meterOrder.filter(name => available.has(name));
         names.forEach(name => { if (!meterOrder.includes(name)) meterOrder.push(name); });
-        return [...meterOrder];
+        return meterOrder.filter(name => visible.has(name));
+      }
+
+      function trackedTargetNames() {
+        return [...new Set(readValues().domains)];
       }
 
       function emptyMetric() {
@@ -666,6 +783,7 @@
         document.body.classList.toggle('lang-en', language === 'en');
         if (fields.language) fields.language.value = language;
         applyStaticTranslations();
+        refreshDomainLabels();
         applyConnectionState();
         applySecretStorageState();
         setInputVisibility(fields.address, addressVisibility, addressVisible, 'settings.hideAddress', 'settings.showAddress');
@@ -693,13 +811,14 @@
         try {
           const values = readValues();
           const stored = JSON.parse(localStorage.getItem(KEY) || '{}');
-          const totals = view === 'widget' ? {} : (stored.historyTotals || {});
+          const totals = { ...(stored.historyTotals || {}) };
           if (view === 'widget') metrics.forEach((metric, name) => { totals[name] = { down: metric.totalDown, up: metric.totalUp }; });
           const next = view === 'widget' ? { ...stored, historyTotals: totals, layoutOrder: [...meterOrder], meterPositions } : {
             controllerEnabled: values.controllerEnabled,
             controllerAddress: values.controllerAddress,
             proxyApp: values.proxyApp,
             domains: values.domains,
+            domainEntries: values.domainEntries,
             history: values.history,
             avgWindow: values.avgWindow,
             lightTheme: values.lightTheme,
@@ -723,11 +842,11 @@
           const stored = JSON.parse(localStorage.getItem(KEY) || 'null');
           fields.secret.value = '';
           settingsDirty = false;
+          renderDomainEntries(normalizeDomainEntries(stored));
           if (!stored) return;
           fields.enabled.checked = stored.controllerEnabled !== false;
           fields.address.value = stored.controllerAddress || '127.0.0.1:9097';
           fields.app.value = stored.proxyApp || 'Clash Verge';
-          fields.domains.value = Array.isArray(stored.domains) ? stored.domains.join('\n') : '';
           fields.history.value = ['7天', '30天', '长期'].includes(stored.history) ? stored.history : '7天';
           fields.avgWindow.value = Object.keys(AVERAGE_WINDOWS).includes(stored.avgWindow) ? stored.avgWindow : DEFAULT_AVERAGE_WINDOW;
           lightTheme = Boolean(stored.lightTheme);
@@ -829,7 +948,7 @@
       }
 
       function ensureMeterPositions(names) {
-        const next = {};
+        const next = { ...meterPositions };
         names.forEach((name, index) => {
           next[name] = validMeterPosition(meterPositions[name])
             ? { x: meterPositions[name].x, y: meterPositions[name].y }
@@ -840,7 +959,7 @@
 
       function normalizeMeterLayout() {
         const names = targetNames();
-        ensureMeterPositions(names);
+        ensureMeterPositions(trackedTargetNames());
         const positions = names.map(name => meterPositions[name]).filter(Boolean);
         if (!positions.length) return;
         const minX = Math.min(...positions.map(position => position.x));
@@ -947,7 +1066,7 @@
 
       function renderMeters() {
         const names = targetNames();
-        ensureMeterPositions(names);
+        ensureMeterPositions(trackedTargetNames());
         const namesKey = JSON.stringify(names);
         if (namesKey !== renderedNames || lightTheme !== renderedTheme || language !== renderedLanguage) {
         meters.replaceChildren(...(names.length ? names.map(createMeter) : [Object.assign(document.createElement('p'), { className: 'meter-empty', textContent: t('meter.empty') })]));
@@ -1168,7 +1287,7 @@
           shiftOtherMeters(dragState.name, moved.deltaX, moved.deltaY);
           positionY = 0;
         }
-        const otherPositions = Object.entries(meterPositions).filter(([name]) => name !== dragState.name).map(([, position]) => position);
+        const otherPositions = targetNames().filter(name => name !== dragState.name).map(name => meterPositions[name]);
         const wantedWidth = Math.max(positionX + 186, innerWidth, ...otherPositions.map(position => position.x + 186));
         const wantedHeight = Math.max(positionY + 154, innerHeight, ...otherPositions.map(position => position.y + 154));
         if (wantedWidth > dragState.canvasWidth || wantedHeight > dragState.canvasHeight) {
@@ -1647,7 +1766,7 @@
           const list = Array.isArray(payload.connections) ? payload.connections : [];
           const now = Date.now();
           const elapsed = lastSampleAt ? Math.max(.1, (now - lastSampleAt) / 1000) : 1;
-          const targets = targetNames();
+          const targets = trackedTargetNames();
           const deltas = new Map(targets.map(name => [name, { down: 0, up: 0 }]));
           const activeTargets = new Set();
           const nextCounters = new Map();
@@ -1743,6 +1862,15 @@
         renderMeters();
         setConnectionState('idle', 'status.dirty');
       };
+      document.getElementById('addDomain').addEventListener('click', () => {
+        fields.domains.querySelector('.domain-empty')?.remove();
+        const row = createDomainEntry({ url: '', visible: true });
+        fields.domains.append(row);
+        refreshDomainLabels();
+        row.querySelector('.domain-url').focus();
+        markSettingsDirty();
+      });
+      fields.domains.addEventListener('input', refreshDomainLabels);
       const eyeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
       const eyeOffIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/></svg>';
       const setInputVisibility = (input, button, visible, hideKey, showKey) => {
@@ -1820,7 +1948,9 @@
         if (event.key !== KEY || view !== 'widget') return;
         try {
           const stored = JSON.parse(event.newValue || '{}');
+          renderDomainEntries(normalizeDomainEntries(stored));
           fields.avgWindow.value = Object.keys(AVERAGE_WINDOWS).includes(stored.avgWindow) ? stored.avgWindow : DEFAULT_AVERAGE_WINDOW;
+          if (!historyPanel.hidden && !targetNames().includes(historyTarget)) closeHistory();
           renderMeters();
         } catch { /* another window wrote malformed settings */ }
       });
