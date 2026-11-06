@@ -25,10 +25,11 @@ function loadSpeed() {
   const code = [
     extractFunction('historySpeedSeries'),
     extractFunction('historyActiveSeconds'),
+    extractFunction('windowRates'),
     'const HISTORY_SPAN_MS = 24 * 60 * 60 * 1000;',
     'const HISTORY_MINUTE_MS = 60000;'
   ].join('\n');
-  return new Function(`${code}\nreturn { historySpeedSeries, historyActiveSeconds };`)();
+  return new Function(`${code}\nreturn { historySpeedSeries, historyActiveSeconds, windowRates };`)();
 }
 
 const MINUTE = 60000;
@@ -106,12 +107,85 @@ test('samples outside the 24 hour window are ignored', () => {
   assert.equal(series.every(point => point.down === null), true);
 });
 
-test('legacy samples without active seconds fall back to a full minute', () => {
+test('bursts across minutes replay both directions with the same active seconds as the tile', () => {
+  const { historySpeedSeries, windowRates } = loadSpeed();
+  const minute = Math.floor(1700000000000 / MINUTE) * MINUTE;
+  const events = [
+    { at: minute - 65000, down: 12000000, up: 6000000, elapsed: 2 },
+    { at: minute - 58000, down: 8000000, up: 0, elapsed: 1 },
+    { at: minute + 2000, down: 10000000, up: 3000000, elapsed: 2 }
+  ];
+  const stored = [...new Set(events.map(event => Math.floor(event.at / MINUTE) * MINUTE))].map(at => {
+    const sameMinute = events.filter(event => Math.floor(event.at / MINUTE) * MINUTE === at);
+    return {
+      at,
+      down: sameMinute.reduce((sum, event) => sum + event.down, 0),
+      up: sameMinute.reduce((sum, event) => sum + event.up, 0),
+      downSeconds: sameMinute.reduce((sum, event) => sum + (event.down > 0 ? event.elapsed : 0), 0),
+      upSeconds: sameMinute.reduce((sum, event) => sum + (event.up > 0 ? event.elapsed : 0), 0)
+    };
+  });
+  const live = windowRates(events, minute - 5 * MINUTE);
+  const historical = historySpeedSeries(stored, minute + 3000, 5 * MINUTE).at(-1);
+  assert.equal(live.down, 6000000);
+  assert.equal(live.up, 2250000);
+  assert.equal(historical.down, live.down);
+  assert.equal(historical.up, live.up);
+});
+
+test('legacy bytes without seconds are unknown, not spread across an invented minute', () => {
   const { historySpeedSeries, historyActiveSeconds } = loadSpeed();
-  const now = 1700000000000;
-  const at = Math.floor(now / MINUTE) * MINUTE;
-  const series = historySpeedSeries([{ at, down: 600, up: 0 }], now, 5 * MINUTE);
-  assert.equal(series[series.length - 1].down, 10);
+  const minute = Math.floor(1700000000000 / MINUTE) * MINUTE;
+  const samples = [
+    { at: minute - MINUTE, down: 12000000, up: 6000000 },
+    { at: minute, down: 600, up: 300, downSeconds: 6, upSeconds: 3 }
+  ];
+  const series = historySpeedSeries(samples, minute + 1000, 2 * MINUTE);
+  assert.equal(series.at(-1).down, null);
+  assert.equal(series.at(-1).up, null);
+  const later = historySpeedSeries(samples, minute + MINUTE + 1000, 2 * MINUTE);
+  assert.equal(later.at(-1).down, 100);
+  assert.equal(later.at(-1).up, 100);
+  assert.equal(historyActiveSeconds(undefined, 12000000), null);
+  assert.equal(historyActiveSeconds(0, 100), null);
+  assert.equal(historyActiveSeconds(null, 10), null);
   assert.equal(historyActiveSeconds(undefined, 0), 0);
-  assert.equal(historyActiveSeconds(12, 0), 12);
+  assert.equal(historyActiveSeconds(6, 100), 6);
+});
+
+test('missing duration in one direction does not conceal the other direction', () => {
+  const { historySpeedSeries } = loadSpeed();
+  const minute = Math.floor(1700000000000 / MINUTE) * MINUTE;
+  const series = historySpeedSeries([
+    { at: minute, down: 12000000, up: 600, upSeconds: 6 }
+  ], minute + 1000, 5 * MINUTE);
+  assert.equal(series.at(-1).down, null);
+  assert.equal(series.at(-1).up, 100);
+});
+
+test('updating a legacy minute preserves unknown duration instead of inventing 60 seconds', async () => {
+  const { historySpeedSeries, historyActiveSeconds } = loadSpeed();
+  const minute = Math.floor(1700000000000 / MINUTE) * MINUTE;
+  const id = 'example.com|' + minute;
+  const saved = new Map([[id, { id, target: 'example.com', at: minute, down: 12000000, up: 0 }]]);
+  const db = {
+    transaction: () => ({ objectStore: () => ({
+      get: key => {
+        const request = { result: saved.get(key) };
+        queueMicrotask(() => request.onsuccess());
+        return request;
+      },
+      put: value => saved.set(value.id, value)
+    }) })
+  };
+  const addHistorySample = new Function('historyBuckets', 'historyDb', 'historyActiveSeconds',
+    extractFunction('addHistorySample') + '\nreturn addHistorySample;')(new Map(), db, historyActiveSeconds);
+  addHistorySample('example.com', minute + 1000, 600, 600, 6, 6);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saved.get(id).down, 12000600);
+  assert.equal(saved.get(id).downSeconds, null);
+  assert.equal(saved.get(id).upSeconds, 6);
+  const point = historySpeedSeries([saved.get(id)], minute + 1000, 5 * MINUTE).at(-1);
+  assert.equal(point.down, null);
+  assert.equal(point.up, 100);
 });

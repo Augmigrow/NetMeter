@@ -4,10 +4,13 @@
 const { app, BrowserWindow } = require('electron');
 const { createServer } = require('node:http');
 const { readFile, writeFile } = require('node:fs/promises');
-const { writeFileSync } = require('node:fs');
+const { writeFileSync, mkdtempSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
+const probeProfile = mkdtempSync(path.join(tmpdir(), 'netmeter-history-probe-'));
+app.setPath('userData', probeProfile);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const results = [];
 const errors = [];
@@ -301,6 +304,43 @@ process.on('unhandledRejection', reason => {
   await sleep(500);
   const restartedTraffic = await readTab();
   check('choosing traffic survives a widget reload', restartedTraffic.selected === 'traffic' && !restartedTraffic.trafficHidden && restartedTraffic.speedHidden && restartedTraffic.stored === 'traffic', JSON.stringify(restartedTraffic));
+
+  // Old history has byte totals but no active seconds. Do not claim that its
+  // transfer lasted a full minute; keep the traffic bars and explain the gap.
+  const legacy = await win.webContents.executeJavaScript(`(async () => {
+    document.getElementById('controllerEnabled').checked = false;
+    const db = await new Promise(resolve => {
+      const request = indexedDB.open('netmeter-history-v1', 1);
+      request.onsuccess = () => resolve(request.result);
+    });
+    const at = Math.floor((Date.now() - 30 * 60000) / 60000) * 60000;
+    const tx = db.transaction('samples', 'readwrite');
+    const store = tx.objectStore('samples');
+    store.clear();
+    store.put({ id: 'example.com|' + at, target: 'example.com', at, down: 12000000, up: 3000000 });
+    await new Promise(resolve => { tx.oncomplete = resolve; });
+    db.close();
+    document.getElementById('historyTabSpeed').click();
+    return true;
+  })()`);
+  await sleep(400);
+  const legacyView = await win.webContents.executeJavaScript(`(() => ({
+    text: document.getElementById('historySpeedChart').textContent.trim(),
+    hasSvg: Boolean(document.querySelector('#historySpeedChart svg')),
+    trafficBars: document.querySelectorAll('#historyChart .history-hour').length,
+    selected: document.querySelector('.history-tab[aria-selected="true"]')?.dataset.tab,
+    speedHidden: document.getElementById('historySpeedChart').hidden,
+    trafficHidden: document.getElementById('historyChart').hidden
+  }))()`);
+  check('legacy history is not misreported as a low average', legacy && legacyView.selected === 'speed' && !legacyView.speedHidden && legacyView.trafficHidden && !legacyView.hasSvg && /活跃秒/.test(legacyView.text), JSON.stringify(legacyView));
+  check('legacy byte totals remain available in the traffic view', legacyView.trafficBars === 24, JSON.stringify({ trafficBars: legacyView.trafficBars }));
+  // A hidden BrowserWindow can retain the last composite after a reload;
+  // resizing forces the captured frame to match the visible DOM state.
+  win.setContentSize(380, 307);
+  win.setContentSize(380, 306);
+  await sleep(300);
+  const legacyImage = await win.webContents.capturePage();
+  await require('node:fs/promises').writeFile(path.join(root, 'scripts', 'history-legacy-probe.png'), legacyImage.toPNG());
 
   check('no renderer script errors', errors.length === 0, errors.join(' | ') || 'none');
 

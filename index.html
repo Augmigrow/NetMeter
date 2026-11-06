@@ -134,6 +134,8 @@
     .history-speed-tip .time { color: #9fb5c8; }
     .history-speed-tip .down { color: #46db8b; }
     .history-speed-tip .up { color: #43b8ff; }
+    .history-speed-legacy-note { position: absolute; bottom: 0; left: 4px; color: #9fb5c8; background: rgba(21, 40, 63, .88); font-size: 10px; pointer-events: none; }
+    .history-panel.light .history-speed-legacy-note { color: #6f8495; background: rgba(247, 250, 252, .9); }
     .meter-empty { color: #687b75; font-size: 12px; padding: 12px 2px; }
     body.settings-mode { min-height: 100vh; background: #fff; }
     body.settings-mode .workspace { min-height: 100vh; display: block; }
@@ -240,6 +242,8 @@
           'history.summaryUpAverage': '上传均速',
           'history.emptyTraffic': '尚未记录到历史流量',
           'history.emptySpeed': '尚无历史均速记录',
+          'history.legacySpeed': '旧记录缺少活跃秒，均速无法还原',
+          'history.legacySpeedNote': '旧数据区段无法计算均速',
           'history.barTitle': '下载 {down} · 上传 {up}',
           'history.curveLabel': '最近 24 小时均速曲线',
           'history.pointDown': '下载均速 {value}',
@@ -341,6 +345,8 @@
           'history.summaryUpAverage': 'Up average',
           'history.emptyTraffic': 'No traffic history recorded yet',
           'history.emptySpeed': 'No average speed history yet',
+          'history.legacySpeed': 'Older records lack active seconds; average unavailable',
+          'history.legacySpeedNote': 'Older segments lack average data',
           'history.barTitle': 'Down {down} · Up {up}',
           'history.curveLabel': 'Average speed curve for the last 24 hours',
           'history.pointDown': 'Down avg {value}',
@@ -1374,13 +1380,14 @@
         const request = store.get(id);
         request.onsuccess = () => {
           const saved = request.result || { id, target: name, at: minute, down: 0, up: 0, downSeconds: 0, upSeconds: 0 };
-          // 老记录没有活跃秒字段，按整分钟补齐，避免分母被低估。
-          if (!(saved.downSeconds > 0) && saved.down > 0) saved.downSeconds = 60;
-          if (!(saved.upSeconds > 0) && saved.up > 0) saved.upSeconds = 60;
+          // Legacy bytes have no active-second count. A later sample in the same
+          // minute cannot make that earlier traffic measurable retroactively.
+          saved.downSeconds = historyActiveSeconds(saved.downSeconds, saved.down);
+          saved.upSeconds = historyActiveSeconds(saved.upSeconds, saved.up);
           saved.down += down;
           saved.up += up;
-          saved.downSeconds += downSeconds;
-          saved.upSeconds += upSeconds;
+          if (saved.downSeconds !== null) saved.downSeconds += downSeconds;
+          if (saved.upSeconds !== null) saved.upSeconds += upSeconds;
           store.put(saved);
         };
       }
@@ -1459,13 +1466,17 @@
           const up = Math.max(0, Number(sample.up) || 0);
           let bucket = byMinute.get(minute);
           if (!bucket) {
-            bucket = { down: 0, up: 0, downSeconds: 0, upSeconds: 0 };
+            bucket = { down: 0, up: 0, downSeconds: 0, upSeconds: 0, downUnknown: false, upUnknown: false };
             byMinute.set(minute, bucket);
           }
           bucket.down += down;
           bucket.up += up;
-          bucket.downSeconds += historyActiveSeconds(sample.downSeconds, down);
-          bucket.upSeconds += historyActiveSeconds(sample.upSeconds, up);
+          const downSeconds = historyActiveSeconds(sample.downSeconds, down);
+          const upSeconds = historyActiveSeconds(sample.upSeconds, up);
+          if (downSeconds === null) bucket.downUnknown = true;
+          else bucket.downSeconds += downSeconds;
+          if (upSeconds === null) bucket.upUnknown = true;
+          else bucket.upSeconds += upSeconds;
         });
         const points = [];
         for (let index = 0; index < count; index += 1) {
@@ -1474,6 +1485,8 @@
           let up = 0;
           let downSeconds = 0;
           let upSeconds = 0;
+          let downUnknown = false;
+          let upUnknown = false;
           for (let back = 0; back < span; back += 1) {
             const bucket = byMinute.get(at - back * HISTORY_MINUTE_MS);
             if (!bucket) continue;
@@ -1481,28 +1494,38 @@
             up += bucket.up;
             downSeconds += bucket.downSeconds;
             upSeconds += bucket.upSeconds;
+            downUnknown ||= bucket.downUnknown;
+            upUnknown ||= bucket.upUnknown;
           }
           points.push({
             at,
-            down: downSeconds > 0 ? down / downSeconds : null,
-            up: upSeconds > 0 ? up / upSeconds : null
+            down: !downUnknown && downSeconds > 0 ? down / downSeconds : null,
+            up: !upUnknown && upSeconds > 0 ? up / upSeconds : null
           });
         }
         return points;
       }
 
-      // 老历史记录没有活跃秒字段，按整分钟折算，缺失秒数时不会把速率算成 0。
+      // Old history has bytes but no active-second duration. Neither 60 seconds
+      // nor a guessed burst duration can reconstruct a truthful average.
       function historyActiveSeconds(stored, bytes) {
         if (Number.isFinite(stored) && stored > 0) return stored;
-        return bytes > 0 ? HISTORY_MINUTE_MS / 1000 : 0;
+        return bytes > 0 ? null : 0;
       }
 
       function drawHistorySpeed(samples) {
         historySpeedChart.replaceChildren();
-        const series = historySpeedSeries(samples, Date.now(), averageWindowMs());
+        const now = Date.now();
+        const windowMs = averageWindowMs();
+        const series = historySpeedSeries(samples, now, windowMs);
+        const earliestRelevant = now - HISTORY_SPAN_MS - windowMs;
+        const hasLegacy = samples.some(sample => sample.at >= earliestRelevant && (
+          historyActiveSeconds(sample.downSeconds, Number(sample.down) || 0) === null ||
+          historyActiveSeconds(sample.upSeconds, Number(sample.up) || 0) === null
+        ));
         const peak = series.reduce((max, item) => Math.max(max, item.down || 0, item.up || 0), 0);
         if (!Number.isFinite(peak) || peak <= 0) {
-          historySpeedChart.innerHTML = '<span class="history-empty">' + t('history.emptySpeed') + '</span>';
+          historySpeedChart.innerHTML = '<span class="history-empty">' + t(hasLegacy ? 'history.legacySpeed' : 'history.emptySpeed') + '</span>';
           return;
         }
         const step = 100 / Math.max(1, series.length - 1);
@@ -1525,6 +1548,12 @@
         parts.push('</svg>');
         historySpeedChart.innerHTML = parts.join('');
         bindHistorySpeedHover(series, step);
+        if (hasLegacy) {
+          const note = document.createElement('span');
+          note.className = 'history-speed-legacy-note';
+          note.textContent = t('history.legacySpeedNote');
+          historySpeedChart.append(note);
+        }
       }
 
       // 悬停读数就是曲线在该时刻的均速（窗口内字节 ÷ 该方向有流量的秒数），与曲线本身一致，

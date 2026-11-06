@@ -1,13 +1,16 @@
-// Offscreen Electron probe: renders the Chinese and English interfaces with
+﻿// Offscreen Electron probe: renders the Chinese and English interfaces with
 // seeded data and writes the README screenshots into docs/screenshots.
 // Run with: node_modules/electron/dist/electron.exe scripts/screenshot-probe.cjs
 const { app, BrowserWindow } = require('electron');
 const { createServer } = require('node:http');
 const { readFile, writeFile, mkdir } = require('node:fs/promises');
-const { writeFileSync } = require('node:fs');
+const { writeFileSync, mkdtempSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
+const probeProfile = mkdtempSync(path.join(tmpdir(), 'netmeter-screenshot-probe-'));
+app.setPath('userData', probeProfile);
 const shotsDir = path.join(root, 'docs', 'screenshots');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const results = [];
@@ -107,8 +110,8 @@ const SEED_HISTORY = `(async () => {
         at,
         down: Math.round((320000 + wave * 1250000) * scale),
         up: Math.round((90000 + wave * 260000) * scale),
-        downSeconds: 60,
-        upSeconds: 60
+        downSeconds: 6,
+        upSeconds: 6
       });
     }
   }
@@ -190,6 +193,10 @@ const HISTORY_SIZE = { width: 380, height: 306 };
     check('captured the ' + language + ' traffic chart', Boolean(target), target);
     await widget.webContents.executeJavaScript(`document.getElementById('historyTabSpeed').click()`);
     await sleep(500);
+    // A read may race the seed transaction on the first language pass; refresh
+    // from IndexedDB again before capturing the rendered history.
+    await widget.webContents.executeJavaScript(`document.getElementById('historyTabSpeed').click()`);
+    await sleep(500);
     // Hover the curve so the screenshot shows the average speed readout of the
     // hovered minute instead of a peak value.
     await widget.webContents.executeJavaScript(`(() => {
@@ -199,6 +206,10 @@ const HISTORY_SIZE = { width: 380, height: 306 };
       const tip = document.querySelector('#historySpeedChart .history-speed-tip');
       return tip ? tip.textContent.trim() : '';
     })()`);
+    // Force a fresh compositor frame after seeding and switching tabs; hidden
+    // BrowserWindows can otherwise capture an earlier frame.
+    widget.setContentSize(HISTORY_SIZE.width, HISTORY_SIZE.height + 1);
+    widget.setContentSize(HISTORY_SIZE.width, HISTORY_SIZE.height);
     await sleep(400);
     target = await capture(widget, 'history-speed-' + suffix + '.png');
     check('captured the ' + language + ' average speed curve', Boolean(target), target);
