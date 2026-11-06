@@ -212,6 +212,7 @@
   <script>
     (() => {
       const KEY = 'netmeter-controller-v2';
+      const HISTORY_TAB_KEY = 'netmeter-history-tab';
       const I18N = {
         zh: {
           'app.title': 'NetMeter 控制器方格',
@@ -442,6 +443,14 @@
         }
       }
 
+      function storedHistoryTab() {
+        try {
+          return localStorage.getItem(HISTORY_TAB_KEY) === 'speed' ? 'speed' : 'traffic';
+        } catch {
+          return 'traffic';
+        }
+      }
+
       function applyStaticTranslations() {
         document.querySelectorAll('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
         document.querySelectorAll('[data-i18n-aria]').forEach(node => { node.setAttribute('aria-label', t(node.dataset.i18nAria)); });
@@ -513,7 +522,7 @@
       let lastPersistAt = 0;
       let settingsDirty = false;
       let historyDb;
-      let historyTab = 'traffic';
+      let historyTab = storedHistoryTab();
       let historySamples = [];
       let historyTarget = '';
       let renderedLanguage = '';
@@ -1295,7 +1304,6 @@
         const metric = getMetric(name);
         const rates = currentRates(metric);
         historyTarget = name;
-        historyTab = 'traffic';
         document.getElementById('dialogTitle').textContent = name;
         renderHistorySummary(metric, rates);
         historyChart.replaceChildren();
@@ -1305,8 +1313,8 @@
           button.setAttribute('aria-selected', String(selected));
           button.tabIndex = selected ? 0 : -1;
         });
-        historyChart.hidden = false;
-        historySpeedChart.hidden = true;
+        historyChart.hidden = historyTab !== 'traffic';
+        historySpeedChart.hidden = historyTab !== 'speed';
         historyPanel.classList.toggle('light', lightTheme);
         historyPanel.hidden = false;
         meters.hidden = true;
@@ -1569,6 +1577,7 @@
 
       function setHistoryTab(tab) {
         historyTab = tab === 'speed' ? 'speed' : 'traffic';
+        try { localStorage.setItem(HISTORY_TAB_KEY, historyTab); } catch { /* Keep the choice for this session. */ }
         historyTabs.forEach(button => {
           const selected = button.dataset.tab === historyTab;
           button.setAttribute('aria-selected', String(selected));

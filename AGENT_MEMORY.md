@@ -26,6 +26,7 @@
 - `scripts/install-start-menu.ps1` 生成开始菜单快捷方式（`NetMeter.lnk`）和 `netmeter.ico` 图标；托盘菜单“固定到开始菜单”可随时重新生成，缺失时启动也会自动补齐，窗口图标使用同一个 ico。
 - 历史流量只由方格头部域名触发，直接替换悬浮窗内容，并使用与方格一致的整窗实色深背景，不再透出桌面；仍不使用内层 `<dialog>`、嵌套弹窗或滚动区，点击累计统计行不会打开历史。
 - 历史面板新增标签栏：「历史流量」是原有的 24 小时柱状图，「历史均速」是同窗口的 24 小时曲线图，两者共用固定 380×306 窗口，切换只换图表不换摘要。历史标题从「域名 · 历史流量」改为只写域名，视图名交给标签栏表达。
+- 历史标签采用“记住上次选择”，不新增设置页默认视图：首次使用是“历史流量”，切换时把 `traffic` 或 `speed` 存到独立的 `netmeter-history-tab` 本地键；关闭重开、换域名和应用重启后恢复。存储不可用时当前渲染会话仍保留选择；无效存储值回退“历史流量”。
 - 「历史均速」曲线口径与方格均速完全一致：横轴是最近 24 小时的每一分钟，纵轴是当前统计窗口（2/5/10 分钟）内的均速 = 字节 ÷ 该方向有流量的秒数，下载与上传各自独立。为支持这个口径，IndexedDB 的分钟样本新增 `downSeconds`/`upSeconds` 字段记录该分钟两个方向各自的有流量秒数；老记录没有该字段时按整分钟 60 秒折算（读取侧 `historyActiveSeconds` 与写入侧 `addHistorySample` 都有兜底），不会把速率算成 0。
 - 曲线用 SVG 画在 100×100 的 viewBox 里并 `preserveAspectRatio="none"` 拉伸到图表区，`vector-effect: non-scaling-stroke` 保证描边不被拉粗；下载/上传两条曲线共用一个纵轴上限（取两者最大值），某个方向在窗口内没有流量时该段路径断开而不是画成 0。悬停提示由 `bindHistorySpeedHover` 绑定在 SVG 上：一个透明 `rect` 接收指针事件，另有 `line.history-speed-cursor` 标出光标所在分钟，提示浮层 `.history-speed-tip` 显示该分钟的下载/上传均速（与曲线点同值，`data-down`/`data-up` 暴露原始字节每秒值供测试断言）。
 - 标签栏用 `role="tablist"`/`role="tab"` + `aria-selected` + roving tabindex，左右方向键在两个标签间切换；切换标签会重新读一次 IndexedDB，让曲线反映面板打开期间新增的样本。
@@ -40,7 +41,7 @@
 
 ## 验证
 
-- 2026-11-06 复核：`npm test` 37/37 通过，覆盖密钥不泄漏到状态响应、启用/禁用配置、对齐落位、窗口化均速与峰值、历史均速和双语字典；`index.html` 内嵌脚本及 12 个 Electron/服务脚本语法检查通过。正式 Electron 实例仍在 4174 监听，`/api/status` 返回已启用且已配置。
+- 2026-11-06 复核：`npm test` 38/38 通过，覆盖密钥不泄漏到状态响应、启用/禁用配置、对齐落位、窗口化均速与峰值、历史均速、历史标签记忆和双语字典；`index.html` 内嵌脚本及 Electron 脚本语法检查通过。正式 Electron 实例已重启并在 4174 监听，`/api/status` 返回已启用且已配置；实机切换到历史均速后打开另一域名，恢复同一标签，检查后还原原先的历史流量选择。
 - `layout.test.mjs` 从 `index.html` 直接取出 `nearestAlignment` 与 `settleMeterPosition` 两个纯函数做单元测试：8px 阈值、落点保持指针位置、邻近方格不得改写坐标、拖动中位置不受对齐影响。
 - `average.test.mjs`（10 项）取出 `windowRates`、`trimRateSamples`、`averageWindowMs` 做纯函数测试：均速与峰值共用窗口裁剪及边界、下载/上传各自独立分母、空闲秒排除、`elapsed` 加权、空窗返回 `null`、峰值取单次采样最大值且滑出窗口即过期、样本裁剪、2/5/10 分钟映射与默认 5 分钟，并断言会话级累计字段已移除。
 - `scripts/average-probe.cjs` 用离屏 Electron 真实窗口 + 合成控制器（下载恒定 100B/s、上传恒为 0）验证 10 项：设置页三档下拉与默认值、保存写入 `localStorage`、重载恢复、悬浮窗读到 2 分钟窗口、只有下载有流量时 `100B/s` 且上传显示「—」、停流后均速不衰减（实测 97.3B/s）、切换峰值显示窗口内峰值、把渲染器时钟快进 3 分钟后峰值与均速都回落为「—」、无脚本错误。运行需 `env -u ELECTRON_RUN_AS_NODE node_modules/electron/dist/electron.exe scripts/average-probe.cjs`；本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`，不取消会让 Electron 退化成普通 Node，且 `.mjs` 探针在当前 Electron 45 里无法解析 `electron` 具名导出，故用 `.cjs`。
@@ -54,10 +55,10 @@
 - 仓库已初始化为 Git 仓库并推送到 `https://github.com/Augmigrow/NetMeter.git`（私有仓库，默认分支 `main`）。GitHub 需要走系统代理 `http://127.0.0.1:7897`，直连超时；代理配置写在仓库本地 `.git/config` 的 `http.proxy`/`https.proxy`。凭据用 Windows 凭据管理器的 GitHub oauth token，Git Credential Manager 会自动提供，不要把 token 写进文件或命令行。本仓库作者身份按兄弟仓库统一为 `Augmigrow <3123196845@qq.com>`，只在仓库本地配置。
 - `scripts/start-app.ps1` 负责重启应用：先杀掉旧的 NetMeter electron 进程，再用 `node_modules/electron/dist/electron.exe .` 启动并轮询 `http://127.0.0.1:4174/api/status` 直到就绪。Windows 下 Electron 是 GUI 子系统进程，必须先 `Remove-Item Env:ELECTRON_RUN_AS_NODE`（本会话环境默认带 `ELECTRON_RUN_AS_NODE=1`）。`scripts/run-probe.ps1` 是通用探针启动器。
 - `scripts/drag-probe.cjs` 现有 15 项场景（含逐帧采样、远距离、不松手、整窗拖动、副屏坐标、先鼠标后 Ctrl 切换），全部通过。
-- `history-speed.test.mjs`（7 项）取出 `historySpeedSeries` 与 `historyActiveSeconds` 做纯函数测试：曲线覆盖 24 小时分钟分辨率、均速与方格同为「字节 ÷ 活跃秒」、空闲秒不进分母、下载与上传独立、窗口按选定分钟数滑出、窗口外样本被忽略、老记录缺活跃秒时按整分钟折算。
+- `history-speed.test.mjs`（8 项）取出 `historySpeedSeries`、`historyActiveSeconds` 与 `storedHistoryTab` 测试：曲线覆盖 24 小时分钟分辨率、均速与方格同为「字节 ÷ 活跃秒」、空闲秒不进分母、下载与上传独立、窗口按选定分钟数滑出、窗口外样本被忽略、老记录缺活跃秒时按整分钟折算；历史标签在未保存、无效值和存储不可用时回退流量页。
 - `i18n.test.mjs`（12 项）直接从 `index.html` 取出 `I18N` 字典做纯函数测试：中英键集合完全一致、没有空文案、英文文案不含中文、占位符两边一致、`t()` 能替换占位符并在缺键时回退到中文、标记里的 `data-i18n*` 钩子和 JS 里的 `t('key')` 引用都指向存在的键、语言下拉框存在且语言不写进设置对象、`setLanguage` 会重绘方格与历史面板、悬浮方格通过 `storage` 事件跟随、主进程托盘菜单与窗口标题已本地化。
 - `scripts/i18n-probe.cjs` 用离屏 Electron 真实窗口验证双语渲染与切换；最近保存的探针日志为 27/27 通过，覆盖中英文方格文案、`<html lang>`、标题与 aria 文案、语言落盘、历史面板标题与标签、摘要四列、曲线 aria-label 与悬停提示、切回中文、另一个窗口（设置页）跟随切换、下拉框显示文案翻译但取值不变、标签文字与箭头间距 ≥3px、无渲染脚本错误。
-- `scripts/history-curve-probe.cjs` 用离屏 Electron 真实窗口（内容区 380×306）验证历史面板；最近保存的探针日志为 18/18 通过，覆盖流量页 24 根柱、速度页两条 SVG 曲线、标签互斥切换、分钟均速悬停读数而非小时峰值、曲线无 NaN、面板不溢出固定窗口和无渲染脚本错误。Windows 下 Electron 是 GUI 子系统进程、不接管控制台，探针把结果写入 `scripts/history-curve-probe.log`，运行时需 `Remove-Item Env:ELECTRON_RUN_AS_NODE` 后用 `Start-Process -WindowStyle Hidden` 启动并轮询日志文件。
+- `scripts/history-curve-probe.cjs` 用离屏 Electron 真实窗口（内容区 380×306）验证历史面板；最近探针为 22/22 通过，覆盖流量页 24 根柱、速度页两条 SVG 曲线、标签互斥切换、分钟均速悬停读数而非小时峰值、曲线无 NaN、面板不溢出，以及选择后关闭重开和重载窗口的双向记忆。Windows 下 Electron 是 GUI 子系统进程、不接管控制台，探针把结果写入 `scripts/history-curve-probe.log`，运行时需 `Remove-Item Env:ELECTRON_RUN_AS_NODE` 后用 `Start-Process -WindowStyle Hidden` 启动并轮询日志文件。
 - `node --check` 已通过 `main.mjs`、`preload.cjs`、`server.mjs`、`average.test.mjs`、`scripts/average-probe.cjs`，内嵌前端脚本语法已通过；自由拖动使用 Pointer Events、分轴对齐和指针捕获，窗口尺寸由像素外接边界驱动。Electron 实际启动时确认设置窗口与方格窗口同时存在且会互相避让。
 - 通过 CDP 派发指针事件并在实际 Electron 窗口中验证：普通左键拖动使悬浮窗整体位移且两格相对位置不变（实测窗口 +80/+60），`Ctrl` 拖动只移动被按下的那一格（实测 +120/+80，另一格不动）；拖出画布左/上边界时悬浮窗同步平移且方格仍跟随指针；域名点击仍打开历史、齿轮点击仍打开设置、均速/峰值仍可切换；历史窗口实测为 380×306。
 - Electron 45.2.1 已安装并启动过；使用独立临时用户数据写入合成测试密钥后，完成一次真实 Electron 重启，确认 `/api/status` 自动恢复为已配置，设置页显示安全保存提示，随后已清理临时测试数据。正式实例在 4174 监听。

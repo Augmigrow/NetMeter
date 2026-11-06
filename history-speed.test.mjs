@@ -33,6 +33,17 @@ function loadSpeed() {
 
 const MINUTE = 60000;
 
+test('history tab memory restores speed and falls back to traffic', () => {
+  const read = new Function('localStorage', 'const HISTORY_TAB_KEY = "netmeter-history-tab"; ' + extractFunction('storedHistoryTab') + '; return storedHistoryTab();');
+  assert.equal(read({ getItem: () => 'speed' }), 'speed');
+  assert.equal(read({ getItem: () => 'traffic' }), 'traffic');
+  assert.equal(read({ getItem: () => null }), 'traffic');
+  assert.equal(read({ getItem: () => 'invalid' }), 'traffic');
+  assert.equal(read({ getItem: () => { throw new Error('storage unavailable'); } }), 'traffic');
+  assert.match(source, /localStorage\.setItem\(HISTORY_TAB_KEY, historyTab\)/);
+  assert.doesNotMatch(source, /id="historyDefaultTab"/);
+});
+
 test('the speed series covers the last 24 hours at minute resolution', () => {
   const { historySpeedSeries } = loadSpeed();
   const now = 1700000000000;

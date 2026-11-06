@@ -269,6 +269,39 @@ process.on('unhandledRejection', reason => {
   }))()`);
   check('switching back restores the traffic bars', trafficAfter.barsVisible && trafficAfter.speedHidden && trafficAfter.bars === 24, JSON.stringify(trafficAfter));
 
+  const readTab = () => win.webContents.executeJavaScript(`(() => ({
+    selected: document.querySelector('.history-tab[aria-selected="true"]')?.dataset.tab,
+    trafficHidden: document.getElementById('historyChart').hidden,
+    speedHidden: document.getElementById('historySpeedChart').hidden,
+    stored: localStorage.getItem('netmeter-history-tab')
+  }))()`);
+  const trafficChoice = await readTab();
+  check('choosing traffic remembers traffic', trafficChoice.selected === 'traffic' && trafficChoice.stored === 'traffic', JSON.stringify(trafficChoice));
+
+  await win.webContents.executeJavaScript(`(() => {
+    document.getElementById('historyTabSpeed').click();
+    document.getElementById('closeDialog').click();
+    document.querySelector('.host-button').click();
+  })()`);
+  await sleep(400);
+  const reopenedSpeed = await readTab();
+  check('reopening history restores the speed tab', reopenedSpeed.selected === 'speed' && reopenedSpeed.trafficHidden && !reopenedSpeed.speedHidden && reopenedSpeed.stored === 'speed', JSON.stringify(reopenedSpeed));
+
+  await win.loadURL(base + '/?view=widget');
+  await sleep(500);
+  await win.webContents.executeJavaScript(`document.querySelector('.host-button').click()`);
+  await sleep(500);
+  const restartedSpeed = await readTab();
+  check('the speed tab survives a widget reload', restartedSpeed.selected === 'speed' && restartedSpeed.trafficHidden && !restartedSpeed.speedHidden, JSON.stringify(restartedSpeed));
+
+  await win.webContents.executeJavaScript(`document.getElementById('historyTabTraffic').click()`);
+  await win.loadURL(base + '/?view=widget');
+  await sleep(500);
+  await win.webContents.executeJavaScript(`document.querySelector('.host-button').click()`);
+  await sleep(500);
+  const restartedTraffic = await readTab();
+  check('choosing traffic survives a widget reload', restartedTraffic.selected === 'traffic' && !restartedTraffic.trafficHidden && restartedTraffic.speedHidden && restartedTraffic.stored === 'traffic', JSON.stringify(restartedTraffic));
+
   check('no renderer script errors', errors.length === 0, errors.join(' | ') || 'none');
 
   const failed = results.filter(item => !item.ok);
