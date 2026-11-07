@@ -80,14 +80,38 @@ const zoom = new Function([
   'return { historySpanWidth, historyZoomSpan, historyZoomPosition, historyViewportBounds };'
 ].join('\n'))();
 
-test('visible spans are validated and remembered separately for both charts', () => {
-  const read = new Function('localStorage', "const HISTORY_SPANS_KEY = 'netmeter-history-visible-spans';" + extract('storedHistoryVisibleSpans') + '; return storedHistoryVisibleSpans();');
-  assert.deepEqual(read({ getItem: () => JSON.stringify({ traffic: 3600000, speed: 300000 }) }), { traffic: 3600000, speed: 300000 });
-  for (const value of [null, 'bad json', '[]', 'null', '{"traffic":0,"speed":"60000"}', '{"traffic":-1,"speed":999999999999}']) {
-    assert.deepEqual(read({ getItem: () => value }), { traffic: null, speed: null });
+test('only the current total range can restore independently validated chart spans', () => {
+  const read = new Function('localStorage', 'range', "const HISTORY_SPANS_KEY = 'netmeter-history-visible-spans';" + extract('storedHistoryVisibleSpans') + '; return storedHistoryVisibleSpans(range);');
+  const saved = { range: '24h', traffic: 3600000, speed: 300000 };
+  assert.deepEqual(read({ getItem: () => JSON.stringify(saved) }, '24h'), { traffic: 3600000, speed: 300000 });
+  assert.deepEqual(read({ getItem: () => JSON.stringify(saved) }, '6h'), { traffic: null, speed: null });
+  for (const value of [null, 'bad json', '[]', 'null', '{"traffic":3600000,"speed":300000}', '{"range":"24h","traffic":0,"speed":"60000"}', '{"range":"24h","traffic":-1,"speed":999999999999}']) {
+    assert.deepEqual(read({ getItem: () => value }, '24h'), { traffic: null, speed: null });
   }
-  assert.deepEqual(read({ getItem: () => { throw Error('disabled'); } }), { traffic: null, speed: null });
-  assert.match(source, /localStorage\.setItem\(HISTORY_SPANS_KEY, JSON\.stringify\(historyVisibleSpans\)\)/);
+  assert.deepEqual(read({ getItem: () => { throw Error('disabled'); } }, '24h'), { traffic: null, speed: null });
+  assert.match(extract('saveHistoryVisibleSpans'), /range: historyRange, \.\.\.historyVisibleSpans/);
+});
+
+test('changing total range clears both charts and never restores discarded ranges', () => {
+  const stored = new Map();
+  const state = new Function('localStorage', rangeCode + "; const HISTORY_RANGE_KEY = 'range'; const HISTORY_SPANS_KEY = 'spans'; let historyRange = '24h'; const historyVisibleSpans = { traffic: 3600000, speed: 300000 }; let historyViewport = { traffic: { left: 100 }, speed: { left: 200 } }; let refreshes = 0; const refreshHistoryTab = () => { refreshes++; };" + extract('saveHistoryVisibleSpans') + extract('setHistoryRange') + '; return { setHistoryRange, historyVisibleSpans, read: () => ({ range: historyRange, viewport: historyViewport, refreshes }) };')({ setItem: (key, value) => stored.set(key, value) });
+  state.setHistoryRange('24h');
+  assert.deepEqual(state.historyVisibleSpans, { traffic: 3600000, speed: 300000 });
+  assert.equal(state.read().refreshes, 0);
+  for (const range of ['6h', '24h', '6h']) {
+    state.setHistoryRange(range);
+    assert.deepEqual(state.historyVisibleSpans, { traffic: null, speed: null });
+    assert.deepEqual(state.read().viewport, { traffic: null, speed: null });
+    assert.deepEqual(JSON.parse(stored.get('spans')), { range, traffic: null, speed: null });
+    assert.equal(stored.get('range'), range);
+    state.historyVisibleSpans.speed = 600000;
+  }
+  assert.equal(state.read().refreshes, 3);
+});
+
+test('changing range still resets in-memory zoom if persistent storage fails', () => {
+  const spans = new Function('localStorage', rangeCode + "; const HISTORY_RANGE_KEY = 'range'; const HISTORY_SPANS_KEY = 'spans'; let historyRange = '24h'; const historyVisibleSpans = { traffic: 3600000, speed: 300000 }; let historyViewport; const refreshHistoryTab = () => {};" + extract('saveHistoryVisibleSpans') + extract('setHistoryRange') + "; setHistoryRange('6h'); return historyVisibleSpans;")({ setItem: () => { throw Error('disabled'); } });
+  assert.deepEqual(spans, { traffic: null, speed: null });
 });
 
 test('Ctrl-wheel in/out changes only the visible span and clamps to resolution/full range', () => {
@@ -117,7 +141,7 @@ test('zoom preserves the cursor time across a wide range of positions and scales
   assert.equal(historyZoomPosition(768, 400, 356, 0, 0), 0);
 });
 
-test('saved zoom does not change total range and restores after visiting a shorter range', () => {
+test('saved zoom sizing respects current range and chart resolution', () => {
   const { historySpanWidth } = zoom;
   const preferred = 120 * minute;
   assert.equal(historySpanWidth(59 * minute, preferred, 5 * minute, 356), 356);

@@ -537,10 +537,11 @@
         catch { return '24h'; }
       }
 
-      function storedHistoryVisibleSpans() {
+      function storedHistoryVisibleSpans(range) {
         const spans = { traffic: null, speed: null };
         try {
           const saved = JSON.parse(localStorage.getItem(HISTORY_SPANS_KEY));
+          if (saved?.range !== range) return spans;
           for (const tab of ['traffic', 'speed']) {
             const span = saved?.[tab];
             if (Number.isFinite(span) && span >= 60000 && span <= 30 * 86400000) spans[tab] = span;
@@ -634,7 +635,8 @@
       let historySamples = [];
       let historyRange = storedHistoryRange();
       let historyViewport = { traffic: null, speed: null };
-      const historyVisibleSpans = storedHistoryVisibleSpans();
+      const historyVisibleSpans = storedHistoryVisibleSpans(historyRange);
+      saveHistoryVisibleSpans(); // Normalize legacy/mismatched records to this range only.
       let historyLoadVersion = 0;
       let historyTarget = '';
       let renderedLanguage = '';
@@ -1770,7 +1772,7 @@
         const anchor = event.clientX - historyScroll.getBoundingClientRect().left;
         const left = historyZoomPosition(oldWidth, newWidth, available, historyScroll.scrollLeft, anchor);
         historyVisibleSpans[historyTab] = span;
-        try { localStorage.setItem(HISTORY_SPANS_KEY, JSON.stringify(historyVisibleSpans)); } catch { /* Remember in this window. */ }
+        saveHistoryVisibleSpans();
         sizeHistoryTimeline(timeline, newWidth);
         historyScroll.scrollLeft = left;
         updateHistoryViewport();
@@ -1980,6 +1982,24 @@
         updateHistoryViewport();
       }
 
+      function saveHistoryVisibleSpans() {
+        try { localStorage.setItem(HISTORY_SPANS_KEY, JSON.stringify({ range: historyRange, ...historyVisibleSpans })); }
+        catch { /* Remember only in this window when storage is unavailable. */ }
+      }
+
+      function setHistoryRange(range) {
+        const next = Object.hasOwn(HISTORY_RANGES, range) ? range : '24h';
+        if (next === historyRange) return;
+        historyRange = next;
+        try { localStorage.setItem(HISTORY_RANGE_KEY, historyRange); } catch { /* Keep the selection for this session. */ }
+        // Keep one range only: neither inherit another range's zoom nor cache it for a return visit.
+        historyVisibleSpans.traffic = null;
+        historyVisibleSpans.speed = null;
+        saveHistoryVisibleSpans();
+        historyViewport = { traffic: null, speed: null };
+        refreshHistoryTab();
+      }
+
       function setHistoryTab(tab) {
         historyTab = tab === 'speed' ? 'speed' : 'traffic';
         try { localStorage.setItem(HISTORY_TAB_KEY, historyTab); } catch { /* Keep the choice for this session. */ }
@@ -2159,12 +2179,7 @@
       });
       document.getElementById('copySummary').addEventListener('click', copySummary);
       document.getElementById('closeDialog').addEventListener('click', closeHistory);
-      historyRangeSelect.addEventListener('change', () => {
-        historyRange = Object.hasOwn(HISTORY_RANGES, historyRangeSelect.value) ? historyRangeSelect.value : '24h';
-        try { localStorage.setItem(HISTORY_RANGE_KEY, historyRange); } catch { /* Keep the selection for this session. */ }
-        historyViewport = { traffic: null, speed: null };
-        refreshHistoryTab();
-      });
+      historyRangeSelect.addEventListener('change', () => setHistoryRange(historyRangeSelect.value));
       historyScroll.addEventListener('scroll', updateHistoryViewport);
       historyScroll.addEventListener('wheel', event => {
         if (event.ctrlKey) { zoomHistoryViewport(event); return; }

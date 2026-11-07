@@ -29,7 +29,7 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
   settings.show();
   const run = code => win.webContents.executeJavaScript(code);
   win.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
-  await run(`localStorage.setItem('netmeter-controller-v2', JSON.stringify({ controllerEnabled: false, domains: ['example.com'], history: '30天', avgWindow: '5分钟', totals: { 'example.com': { down: 920483901, up: 204902300 } }, lightTheme: false })); localStorage.setItem('netmeter-history-tab', 'traffic'); localStorage.setItem('netmeter-history-range', '24h');`);
+  await run(`localStorage.setItem('netmeter-controller-v2', JSON.stringify({ controllerEnabled: false, domains: ['example.com'], history: '30天', avgWindow: '5分钟', totals: { 'example.com': { down: 920483901, up: 204902300 } }, lightTheme: false })); localStorage.setItem('netmeter-history-tab', 'traffic'); localStorage.setItem('netmeter-history-range', '24h'); localStorage.setItem('netmeter-history-visible-spans', JSON.stringify({ traffic: 3600000, speed: 300000 }));`);
   await win.webContents.reload();
   await pause(600);
   await run(`(async () => {
@@ -146,6 +146,36 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
   check('zoom is restored after renderer restart', (await state()).width === rememberedSpeedWidth, await state());
   await run("document.getElementById('historyTabTraffic').click()"); await pause(180);
   check('each chart zoom is independently persisted', (await state()).width === trafficWidth, await state());
+  const savedZoom = () => run("JSON.parse(localStorage.getItem('netmeter-history-visible-spans'))");
+  check('persisted zoom identifies only the selected total range', (await savedZoom()).range === '24h' && Object.keys(await savedZoom()).sort().join(',') === 'range,speed,traffic', await savedZoom());
+  async function changeRange(range) {
+    await run(`(() => { const select = document.getElementById('historyRange'); select.value = '${range}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await pause(250);
+  }
+  await changeRange('6h');
+  let reset = await state(), saved = await savedZoom();
+  check('switching total range resets traffic and discards both old zoom memories', reset.range === '6h' && reset.width === reset.client && reset.left === 0 && saved.range === '6h' && saved.traffic === null && saved.speed === null, { state: reset, saved });
+  await run("document.getElementById('historyTabSpeed').click()"); await pause(180);
+  reset = await state();
+  check('the other chart also starts at full span after a total-range switch', reset.width === reset.client && reset.left === 0, reset);
+  await zoomWheel(-240);
+  const sixHourZoom = (await state()).width;
+  await win.webContents.reload(); await pause(450); await run("document.querySelector('.host-button').click()"); await pause(250);
+  check('the current range alone retains its customized zoom across reload', (await state()).range === '6h' && (await state()).width === sixHourZoom && sixHourZoom > (await state()).client, { state: await state(), saved: await savedZoom() });
+  await changeRange('24h');
+  reset = await state();
+  check('returning to a previous range does not resurrect its earlier speed zoom', reset.width === reset.client && reset.left === 0 && (await savedZoom()).range === '24h', reset);
+  await run("document.getElementById('historyTabTraffic').click()"); await pause(180);
+  reset = await state();
+  check('returning to a previous range also discards its earlier traffic zoom', reset.width === reset.client && reset.left === 0, reset);
+  await changeRange('6h');
+  await run("document.getElementById('historyTabSpeed').click()"); await pause(180);
+  reset = await state();
+  check('there is no per-range zoom cache to restore on another return visit', reset.width === reset.client && (await savedZoom()).traffic === null && (await savedZoom()).speed === null, { state: reset, saved: await savedZoom() });
+  await run("localStorage.setItem('netmeter-history-range', '24h'); localStorage.setItem('netmeter-history-visible-spans', JSON.stringify({ range: '6h', traffic: 3600000, speed: 300000 }))");
+  await win.webContents.reload(); await pause(450); await run("document.querySelector('.host-button').click()"); await pause(250);
+  reset = await state(); saved = await savedZoom();
+  check('a mismatched range tag is ignored and normalized to the selected full range', reset.range === '24h' && reset.width === reset.client && saved.range === '24h' && saved.traffic === null && saved.speed === null, { state: reset, saved });
   // Return to a fresh full-range view for each total-range assertion.
   await run("localStorage.removeItem('netmeter-history-visible-spans'); localStorage.setItem('netmeter-history-tab', 'speed')");
   await win.webContents.reload(); await pause(450); await run("document.querySelector('.host-button').click()"); await pause(250);
