@@ -70,3 +70,85 @@ test('only the timeline scrolls; stale asynchronous history loads are discarded'
   assert.match(source, /event\.deltaY/);
   assert.match(source, /event\.key !== 'Home'/);
 });
+
+const zoom = new Function([
+  ...['historySpanWidth', 'historyZoomSpan', 'historyZoomPosition', 'historyViewportBounds'].map(extract),
+  'return { historySpanWidth, historyZoomSpan, historyZoomPosition, historyViewportBounds };'
+].join('\n'))();
+
+test('visible spans are validated and remembered separately for both charts', () => {
+  const read = new Function('localStorage', "const HISTORY_SPANS_KEY = 'netmeter-history-visible-spans';" + extract('storedHistoryVisibleSpans') + '; return storedHistoryVisibleSpans();');
+  assert.deepEqual(read({ getItem: () => JSON.stringify({ traffic: 3600000, speed: 300000 }) }), { traffic: 3600000, speed: 300000 });
+  for (const value of [null, 'bad json', '[]', 'null', '{"traffic":0,"speed":"60000"}', '{"traffic":-1,"speed":999999999999}']) {
+    assert.deepEqual(read({ getItem: () => value }), { traffic: null, speed: null });
+  }
+  assert.deepEqual(read({ getItem: () => { throw Error('disabled'); } }), { traffic: null, speed: null });
+  assert.match(source, /localStorage\.setItem\(HISTORY_SPANS_KEY, JSON\.stringify\(historyVisibleSpans\)\)/);
+});
+
+test('Ctrl-wheel in/out changes only the visible span and clamps to resolution/full range', () => {
+  const { historyZoomSpan } = zoom;
+  assert.ok(historyZoomSpan(60 * minute, -100, 5 * minute, 1440 * minute) < 60 * minute);
+  assert.ok(historyZoomSpan(60 * minute, 100, 5 * minute, 1440 * minute) > 60 * minute);
+  assert.equal(historyZoomSpan(5 * minute, -1000, 5 * minute, 1440 * minute), 5 * minute);
+  assert.equal(historyZoomSpan(1440 * minute, 1000, 5 * minute, 1440 * minute), 1440 * minute);
+  assert.equal(historyZoomSpan(59 * minute, -1000, 60 * minute, 59 * minute), 59 * minute);
+  assert.equal(historyZoomSpan(60 * minute, 0, 5 * minute, 1440 * minute), 60 * minute);
+});
+
+test('zoom preserves the cursor time across a wide range of positions and scales', () => {
+  const { historyZoomPosition } = zoom;
+  for (const oldWidth of [356, 768, 5756, 172796]) {
+    for (const ratio of [.25, .5, .75]) {
+      for (const anchor of [0, 89, 178, 356]) {
+        const left = (oldWidth - 356) * ratio;
+        const newWidth = oldWidth * 1.5;
+        const next = historyZoomPosition(oldWidth, newWidth, 356, left, anchor);
+        assert.ok(Math.abs((left + anchor) / oldWidth - (next + anchor) / newWidth) < 1e-10);
+      }
+    }
+  }
+  assert.equal(historyZoomPosition(5756, 356, 356, 5000, 178), 0);
+  assert.equal(historyZoomPosition(768, 400, 356, 412, 356), 44);
+  assert.equal(historyZoomPosition(768, 400, 356, 0, 0), 0);
+});
+
+test('saved zoom does not change total range and restores after visiting a shorter range', () => {
+  const { historySpanWidth } = zoom;
+  const preferred = 120 * minute;
+  assert.equal(historySpanWidth(59 * minute, preferred, 5 * minute, 356, 356), 356);
+  assert.equal(historySpanWidth(359 * minute, preferred, 5 * minute, 356, 1436), Math.round(359 / 120 * 356));
+  assert.equal(historySpanWidth(1439 * minute, preferred, 5 * minute, 356, 5756), Math.round(1439 / 120 * 356));
+  assert.equal(historySpanWidth(1439 * minute, null, 5 * minute, 356, 5756), 5756);
+  assert.equal(historySpanWidth(1439 * minute, 5 * minute, 60 * minute, 356, 768), Math.round(1439 / 60 * 356));
+});
+
+test('visible date boundaries follow scrolling and fit-to-range correctly', () => {
+  const { historyViewportBounds } = zoom;
+  assert.deepEqual(historyViewportBounds(0, 1000, 1000, 200, 300), { start: 300, end: 500 });
+  assert.deepEqual(historyViewportBounds(0, 1000, 1000, 200, 10000), { start: 800, end: 1000 });
+  assert.deepEqual(historyViewportBounds(0, 1000, 200, 200, 0), { start: 0, end: 1000 });
+});
+
+test('visible span formatting is bilingual, compact, and never reports zero minutes', () => {
+  const format = new Function('language', 't', extract('historyDurationLabel') + '; return historyDurationLabel;');
+  const t = (key, vars) => vars.value + ({ Day: 'd', Hour: 'h', Minute: 'm' }[key.replace('history.duration', '')]);
+  assert.equal(format('en', t)(89 * minute), '1h 29m');
+  assert.equal(format('en', t)(43199 * minute), '29d 23h 59m');
+  assert.equal(format('en', t)(0), '1m');
+  assert.equal(format('zh', t)(89 * minute), '1h29m');
+});
+
+test('zoom resizes the existing plot without replacing or re-aggregating its samples', () => {
+  const handler = extract('zoomHistoryViewport');
+  assert.match(handler, /event\.preventDefault\(\)/);
+  assert.match(handler, /sizeHistoryTimeline/);
+  assert.doesNotMatch(handler, /drawHistory\(|drawHistorySpeed\(|historySpeedSeries\(/);
+  assert.match(source, /if \(event\.ctrlKey\) \{ zoomHistoryViewport\(event\); return; \}/);
+  assert.match(extract('updateHistoryAxis'), /historyScroll\.scrollLeft/);
+});
+
+
+test('the minute cursor uses subpixel-safe precision even at maximum 30-day zoom', () => {
+  assert.match(extract('bindHistorySpeedHover'), /historySpeedX\(index, series\.length\)\.toFixed\(5\)/);
+});
