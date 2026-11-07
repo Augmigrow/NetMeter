@@ -1,13 +1,14 @@
 ﻿import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, safeStorage, shell, dialog } from 'electron';
 import { resolve, dirname, join } from 'node:path';
 import { appendFile, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createNetMeterServer } from './server.mjs';
 import { createPinToStartAction } from './start-menu.mjs';
+import { APP_ID, shellIdentity } from './shell-identity.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
+app.setName('NetMeter');
 let server;
 let serverPort;
 let settingsWindow;
@@ -143,7 +144,12 @@ function installStartMenuShortcut() {
     const script = resolve(root, 'scripts', 'install-start-menu.ps1');
     const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-TargetPath', process.execPath, '-Arguments', `"${root}"`, '-WorkingDirectory', root, '-IconPath', appIconPath(), '-ShortcutPath', startMenuShortcutPath()], { windowsHide: true });
     child.on('error', () => resolveResult(false));
-    child.on('close', code => resolveResult(code === 0));
+    child.on('close', code => {
+      if (code !== 0) { resolveResult(false); return; }
+      // Give the .lnk the same explicit identity as the taskbar window.
+      try { resolveResult(shell.writeShortcutLink(startMenuShortcutPath(), 'update', shellIdentity(process.execPath, root, appIconPath()).shortcut)); }
+      catch { resolveResult(false); }
+    });
   });
 }
 
@@ -244,6 +250,7 @@ function placeSettingsBesideWidget() {
 function showSettings() {
   if (!settingsWindow || settingsWindow.isDestroyed()) {
     settingsWindow = new BrowserWindow({
+      show: false,
       width: 560,
       height: 740,
       minWidth: 440,
@@ -258,6 +265,7 @@ function showSettings() {
         sandbox: true
       }
     });
+    settingsWindow.setAppDetails(shellIdentity(process.execPath, root, appIconPath()).window);
     settingsWindow.on('close', event => {
       if (!quitting) {
         event.preventDefault();
@@ -277,6 +285,7 @@ function showSettings() {
 function showWidget() {
   if (!widgetWindow || widgetWindow.isDestroyed()) {
     widgetWindow = new BrowserWindow({
+      show: false,
       width: 192,
       height: 160,
       minWidth: 192,
@@ -300,6 +309,7 @@ function showWidget() {
         sandbox: true
       }
     });
+    widgetWindow.setAppDetails(shellIdentity(process.execPath, root, appIconPath()).window);
     widgetWindow.setAlwaysOnTop(true, 'screen-saver');
     widgetWindow.on('closed', () => {
       widgetWindow = null;
@@ -450,14 +460,15 @@ ipcMain.on('app:settings-saved', event => {
 });
 
 app.whenReady().then(async () => {
-  app.setAppUserModelId('local.netmeter.desktop');
+  app.setAppUserModelId(APP_ID);
   await ensureAppIcon();
   await startLocalServer(await loadControllerConfig());
   widgetWindowState = await loadWidgetWindowState();
   createTray();
   showWidget();
   showSettings();
-  if (!existsSync(startMenuShortcutPath())) installStartMenuShortcut();
+  // Repair older shortcuts that lacked AppUserModelID; this never pins them.
+  await installStartMenuShortcut();
 });
 
 app.on('activate', showWidget);

@@ -203,8 +203,8 @@ const HISTORY_SIZE = { width: 380, height: 306 };
     await widget.webContents.executeJavaScript(`(() => {
       const svg = document.querySelector('#historySpeedChart svg');
       const box = svg.getBoundingClientRect();
-      svg.dispatchEvent(new MouseEvent('mousemove', { clientX: box.left + box.width * 0.62, clientY: box.top + box.height * 0.45, bubbles: true }));
-      const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+      svg.dispatchEvent(new MouseEvent('mousemove', { clientX: document.getElementById('historyScroll').getBoundingClientRect().left + 220, clientY: box.top + box.height * 0.45, bubbles: true }));
+      const tip = document.querySelector('#historyPanel .history-speed-tip');
       return tip ? tip.textContent.trim() : '';
     })()`);
     // Force a fresh compositor frame after seeding and switching tabs; hidden
@@ -217,7 +217,7 @@ const HISTORY_SIZE = { width: 380, height: 306 };
   }
 
   const hover = await widget.webContents.executeJavaScript(`(() => {
-    const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+    const tip = document.querySelector('#historyPanel .history-speed-tip');
     return { visible: Boolean(tip) && tip.hidden === false, text: tip ? tip.textContent.trim() : '', down: tip ? tip.dataset.down : '' };
   })()`);
   check('the captured curve shows the hovered average speed', hover.visible === true && hover.down !== '' && !/peak|峰值/i.test(hover.text), JSON.stringify(hover));

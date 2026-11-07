@@ -208,11 +208,12 @@ function readStatLayout(win) {
 
   const enHistory = await win.webContents.executeJavaScript(`(() => ({
     kicker: document.querySelector('.history-kicker').textContent.trim(),
+    range: document.querySelector('#historyRange option:checked').textContent.trim(),
     tabs: [...document.querySelectorAll('.history-tab')].map(button => button.textContent.trim()),
     summary: [...document.querySelectorAll('.history-item small')].map(node => node.textContent.trim()),
     title: document.getElementById('dialogTitle').textContent.trim()
   }))()`);
-  check('the history panel is localised', enHistory.kicker === 'Last 24 hours' && enHistory.tabs.join('/') === 'Traffic/Average speed', JSON.stringify(enHistory));
+  check('the history panel is localised', enHistory.range === 'Last 24 hours' && enHistory.kicker.includes(' — ') && enHistory.tabs.join('/') === 'Traffic/Average speed', JSON.stringify(enHistory));
   check('the history summary columns are localised', enHistory.summary.join('/') === 'Down total/Up total/Down average/Up average', JSON.stringify(enHistory.summary));
   check('the history title still shows the domain only', enHistory.title === 'example.com', String(enHistory.title));
 
@@ -226,14 +227,14 @@ function readStatLayout(win) {
       peakText: document.getElementById('historySpeedChart').textContent.includes('peak')
     };
   })()`);
-  check('the average speed curve is labelled in english', enCurve.label === 'Average speed curve for the last 24 hours' && enCurve.paths === 2, JSON.stringify(enCurve));
+  check('the average speed curve is labelled in english', enCurve.label === 'Historical average speed curve' && enCurve.paths === 2, JSON.stringify(enCurve));
   check('the curve never reports a peak instead of the average', enCurve.peakText === false, JSON.stringify(enCurve));
 
   const enTip = await win.webContents.executeJavaScript(`(() => {
     const svg = document.querySelector('#historySpeedChart svg');
     const box = svg.getBoundingClientRect();
-    svg.dispatchEvent(new MouseEvent('mousemove', { clientX: box.left + box.width * 0.5, clientY: box.top + box.height * 0.5, bubbles: true }));
-    const tip = document.querySelector('#historySpeedChart .history-speed-tip');
+    svg.dispatchEvent(new MouseEvent('mousemove', { clientX: document.getElementById('historyScroll').getBoundingClientRect().left + 180, clientY: box.top + box.height * 0.5, bubbles: true }));
+    const tip = document.querySelector('#historyPanel .history-speed-tip');
     return { hidden: tip ? tip.hidden : true, text: tip ? tip.textContent.trim() : '' };
   })()`);
   check('the curve hover reads the average speed', enTip.hidden === false && enTip.text.includes('Down avg') && enTip.text.includes('Up avg') && !enTip.text.includes('peak'), JSON.stringify(enTip));
@@ -248,11 +249,12 @@ function readStatLayout(win) {
   await sleep(400);
   const zhAgain = await win.webContents.executeJavaScript(`(() => ({
     kicker: document.querySelector('.history-kicker').textContent.trim(),
+    range: document.querySelector('#historyRange option:checked').textContent.trim(),
     tabs: [...document.querySelectorAll('.history-tab')].map(button => button.textContent.trim()),
     summary: [...document.querySelectorAll('.history-item small')].map(node => node.textContent.trim()),
     labels: [...document.querySelectorAll('.meter .rate-label')].map(node => node.textContent.trim())
   }))()`);
-  check('switching back restores chinese everywhere', zhAgain.kicker === '最近 24 小时' && zhAgain.tabs.join('/') === '历史流量/历史均速' && zhAgain.summary.join('/') === '下载累计/上传累计/下载均速/上传均速' && zhAgain.labels.join('/') === '下载/上传', JSON.stringify(zhAgain));
+  check('switching back restores chinese everywhere', zhAgain.range === '最近 24 小时' && zhAgain.kicker.includes(' — ') && zhAgain.tabs.join('/') === '历史流量/历史均速' && zhAgain.summary.join('/') === '下载累计/上传累计/下载均速/上传均速' && zhAgain.labels.join('/') === '下载/上传', JSON.stringify(zhAgain));
 
   // A second window (the settings window) must follow the language change.
   const settings = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });

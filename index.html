@@ -183,6 +183,31 @@
     body.widget-mode.ctrl-held .meter { cursor: move; }
     body.widget-mode.dragging .meter { cursor: grabbing; }
     body.widget-mode.window-dragging .meter { cursor: grabbing; }
+
+    /* History is a horizontally scrollable timeline, not a fit-to-window chart. */
+    .history-panel { position: relative; }
+    .history-head { margin-bottom: 10px; }
+    .history-summary { margin-bottom: 10px; }
+    .history-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+    .history-tabs { margin-bottom: 0; flex-shrink: 0; }
+    .history-range { width: 112px; height: 25px; min-height: 0; padding: 2px 4px; border: 1px solid #40556d; border-radius: 4px; color: inherit; background: #15283f; font: inherit; font-size: 11px; }
+    .history-panel.light .history-range { color: #183249; background: #f7fafc; border-color: #abbcc8; }
+    .history-scroll { height: 156px; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #6c879f #1b324b; }
+    .history-panel.light .history-scroll { scrollbar-color: #8da3b6 #e6edf3; }
+    .history-scroll:focus-visible, .history-range:focus-visible { outline: 1px solid #77b9de; outline-offset: 1px; }
+    .history-chart, .history-speed-chart { display: block; height: 144px; padding: 0; background: none !important; }
+    .history-timeline { position: relative; height: 144px; }
+    .history-traffic-plot { height: 120px; display: grid; align-items: end; gap: 3px; }
+    .history-hour { height: 120px; }
+    .history-speed-svg { height: 120px; }
+    .history-traffic-plot, .history-speed-svg { background: repeating-linear-gradient(to bottom, transparent 0, transparent 38px, rgba(157,181,200,.17) 39px); }
+    .history-axis { position: relative; height: 24px; color: #9fb5c8; font-size: 10px; }
+    .history-panel.light .history-axis { color: #6f8495; }
+    .history-axis span { position: absolute; top: 4px; white-space: nowrap; transform: translateX(-50%); }
+    .history-axis span:first-child { transform: none; }
+    .history-axis span:last-child { transform: translateX(-100%); }
+    .history-empty { display: block; padding-top: 48px; }
+    .history-speed-legacy-note { bottom: 51px; left: 12px; z-index: 2; }
     @media (max-width: 750px) { .workspace { grid-template-columns: 1fr; } .stage { min-height: 270px; padding: 24px 18px; } .stage-heading { margin-bottom: 18px; } .settings { border-left: 0; border-top: 1px solid #d7e0dc; padding: 22px 18px 32px; } }
   </style>
 </head>
@@ -193,7 +218,7 @@
       <div id="meters" class="meters"></div>
       <span id="verticalAlignmentGuide" class="alignment-guide vertical" aria-hidden="true"></span>
       <span id="horizontalAlignmentGuide" class="alignment-guide horizontal" aria-hidden="true"></span>
-      <section id="historyPanel" class="history-panel" aria-labelledby="dialogTitle" hidden><div class="history-head"><div class="history-title"><span class="history-kicker" data-i18n="history.last24h">最近 24 小时</span><h2 id="dialogTitle">历史流量</h2></div><button id="closeDialog" class="close-button" type="button" aria-label="关闭" title="关闭" data-i18n-aria="action.close" data-i18n-title="action.close">×</button></div><div id="historySummary" class="history-summary"></div><div class="history-tabs" role="tablist" aria-label="历史视图" data-i18n-aria="history.views"><button id="historyTabTraffic" class="history-tab" type="button" role="tab" data-tab="traffic" aria-selected="true" aria-controls="historyChart" data-i18n="history.tabTraffic">历史流量</button><button id="historyTabSpeed" class="history-tab" type="button" role="tab" data-tab="speed" aria-selected="false" aria-controls="historySpeedChart" data-i18n="history.tabSpeed">历史均速</button></div><div id="historyChart" class="history-chart" role="tabpanel" aria-labelledby="historyTabTraffic"></div><div id="historySpeedChart" class="history-speed-chart" role="tabpanel" aria-labelledby="historyTabSpeed" hidden></div></section>
+      <section id="historyPanel" class="history-panel" aria-labelledby="dialogTitle" hidden><div class="history-head"><div class="history-title"><span id="historyRangeLabel" class="history-kicker"></span><h2 id="dialogTitle">历史流量</h2></div><button id="closeDialog" class="close-button" type="button" aria-label="关闭" title="关闭" data-i18n-aria="action.close" data-i18n-title="action.close">×</button></div><div id="historySummary" class="history-summary"></div><div class="history-toolbar"><div class="history-tabs" role="tablist" aria-label="历史视图" data-i18n-aria="history.views"><button id="historyTabTraffic" class="history-tab" type="button" role="tab" data-tab="traffic" aria-selected="true" aria-controls="historyChart" data-i18n="history.tabTraffic">历史流量</button><button id="historyTabSpeed" class="history-tab" type="button" role="tab" data-tab="speed" aria-selected="false" aria-controls="historySpeedChart" data-i18n="history.tabSpeed">历史均速</button></div><select id="historyRange" class="history-range" aria-label="时间范围" data-i18n-aria="history.range"><option value="1h" data-i18n="history.range1h">最近 1 小时</option><option value="6h" data-i18n="history.range6h">最近 6 小时</option><option value="24h" data-i18n="history.range24h">最近 24 小时</option><option value="7d" data-i18n="history.range7d">最近 7 天</option><option value="30d" data-i18n="history.range30d">最近 30 天</option></select></div><div id="historyScroll" class="history-scroll" tabindex="0" role="region" aria-label="历史时间轴" data-i18n-aria="history.timeline"><div id="historyChart" class="history-chart" role="tabpanel" aria-labelledby="historyTabTraffic"></div><div id="historySpeedChart" class="history-speed-chart" role="tabpanel" aria-labelledby="historyTabSpeed" hidden></div></div></section>
     </section>
     <aside class="settings">
       <h2 data-i18n="settings.controller">外部控制器</h2>
@@ -227,6 +252,8 @@
     (() => {
       const KEY = 'netmeter-controller-v2';
       const HISTORY_TAB_KEY = 'netmeter-history-tab';
+      const HISTORY_RANGE_KEY = 'netmeter-history-range';
+      const HISTORY_RANGES = { '1h': 60, '6h': 360, '24h': 1440, '7d': 10080, '30d': 43200 };
       const I18N = {
         zh: {
           'app.title': 'NetMeter 控制器方格',
@@ -245,6 +272,13 @@
           'status.configFailed': '配置失败 · {message}',
           'status.configFailedDefault': '无法保存',
           'history.last24h': '最近 24 小时',
+          'history.range': '时间范围',
+          'history.range1h': '最近 1 小时',
+          'history.range6h': '最近 6 小时',
+          'history.range24h': '最近 24 小时',
+          'history.range7d': '最近 7 天',
+          'history.range30d': '最近 30 天',
+          'history.timeline': '历史时间轴，可横向滚动',
           'history.views': '历史视图',
           'history.tabTraffic': '历史流量',
           'history.tabSpeed': '历史均速',
@@ -257,7 +291,7 @@
           'history.legacySpeed': '旧记录缺少活跃秒，均速无法还原',
           'history.legacySpeedNote': '旧数据区段无法计算均速',
           'history.barTitle': '下载 {down} · 上传 {up}',
-          'history.curveLabel': '最近 24 小时均速曲线',
+          'history.curveLabel': '历史均速曲线',
           'history.pointDown': '下载均速 {value}',
           'history.pointUp': '上传均速 {value}',
           'meter.empty': '尚未选择显示的网址',
@@ -355,6 +389,13 @@
           'status.configFailed': 'Configuration failed · {message}',
           'status.configFailedDefault': 'Could not save',
           'history.last24h': 'Last 24 hours',
+          'history.range': 'Time range',
+          'history.range1h': 'Last 1 hour',
+          'history.range6h': 'Last 6 hours',
+          'history.range24h': 'Last 24 hours',
+          'history.range7d': 'Last 7 days',
+          'history.range30d': 'Last 30 days',
+          'history.timeline': 'History timeline, horizontally scrollable',
           'history.views': 'History views',
           'history.tabTraffic': 'Traffic',
           'history.tabSpeed': 'Average speed',
@@ -367,7 +408,7 @@
           'history.legacySpeed': 'Older records lack active seconds; average unavailable',
           'history.legacySpeedNote': 'Older segments lack average data',
           'history.barTitle': 'Down {down} · Up {up}',
-          'history.curveLabel': 'Average speed curve for the last 24 hours',
+          'history.curveLabel': 'Historical average speed curve',
           'history.pointDown': 'Down avg {value}',
           'history.pointUp': 'Up avg {value}',
           'meter.empty': 'No websites selected for display',
@@ -475,6 +516,11 @@
         }
       }
 
+      function storedHistoryRange() {
+        try { const saved = localStorage.getItem(HISTORY_RANGE_KEY); return Object.hasOwn(HISTORY_RANGES, saved) ? saved : '24h'; }
+        catch { return '24h'; }
+      }
+
       function storedHistoryTab() {
         try {
           return localStorage.getItem(HISTORY_TAB_KEY) === 'speed' ? 'speed' : 'traffic';
@@ -518,6 +564,8 @@
       const historyChart = document.getElementById('historyChart');
       const historySpeedChart = document.getElementById('historySpeedChart');
       const historyTabs = Array.from(document.querySelectorAll('.history-tab'));
+      const historyRangeSelect = document.getElementById('historyRange');
+      const historyScroll = document.getElementById('historyScroll');
       const fields = {
         enabled: document.getElementById('controllerEnabled'),
         address: document.getElementById('controllerAddress'),
@@ -556,6 +604,9 @@
       let historyDb;
       let historyTab = storedHistoryTab();
       let historySamples = [];
+      let historyRange = storedHistoryRange();
+      let historyViewport = { traffic: null, speed: null };
+      let historyLoadVersion = 0;
       let historyTarget = '';
       let renderedLanguage = '';
       // The stage status and the settings status start with different texts and
@@ -1429,6 +1480,8 @@
         const metric = getMetric(name);
         const rates = currentRates(metric);
         historyTarget = name;
+        historyViewport = { traffic: null, speed: null };
+        historyRangeSelect.value = historyRange;
         document.getElementById('dialogTitle').textContent = name;
         renderHistorySummary(metric, rates);
         historyChart.replaceChildren();
@@ -1444,7 +1497,7 @@
         historyPanel.hidden = false;
         meters.hidden = true;
         document.body.classList.add('history-mode');
-        loadHistory(name).then(samples => { historySamples = samples; renderHistoryTab(); });
+        refreshHistoryTab();
         window.netmeterDesktop?.historyOpen(true);
       }
 
@@ -1466,6 +1519,8 @@
       function closeHistory() {
         if (historyPanel.hidden) return;
         historyPanel.hidden = true;
+        historyLoadVersion += 1;
+        historyPanel.querySelectorAll('.history-speed-tip, .history-speed-legacy-note').forEach(node => node.remove());
         meters.hidden = false;
         document.body.classList.remove('history-mode');
         window.netmeterDesktop?.historyOpen(false);
@@ -1531,40 +1586,103 @@
       function loadHistory(name) {
         if (!historyDb) return Promise.resolve([]);
         return new Promise(resolve => {
-          const range = IDBKeyRange.bound([name, retentionStart()], [name, Date.now()]);
+          const since = Math.max(retentionStart(), Date.now() - HISTORY_RANGES[historyRange] * 60000 - averageWindowMs() - 60000);
+          const range = IDBKeyRange.bound([name, since], [name, Date.now()]);
           const request = historyDb.transaction('samples').objectStore('samples').index('targetAt').getAll(range);
           request.onsuccess = () => resolve(request.result || []);
           request.onerror = () => resolve([]);
         });
       }
 
-      function drawHistory(samples) {
-        const since = Date.now() - 24 * 60 * 60 * 1000;
-        const hours = Array.from({ length: 24 }, () => ({ down: 0, up: 0 }));
-        samples.filter(sample => sample.at >= since).forEach(sample => {
-          const index = Math.min(23, Math.floor((sample.at - since) / 3600000));
-          hours[index].down += sample.down;
-          hours[index].up += sample.up;
+      function historyRangeBounds(now, rangeMs) {
+        const last = Math.floor(now / 60000) * 60000;
+        const count = Math.max(1, Math.round(rangeMs / 60000));
+        return { start: last - (count - 1) * 60000, last, count };
+      }
+
+      function historyTrafficSeries(samples, now, rangeMs) {
+        const bounds = historyRangeBounds(now, rangeMs);
+        const bucketMs = rangeMs <= 6 * 3600000 ? 5 * 60000 : 3600000;
+        const count = Math.ceil(rangeMs / bucketMs);
+        const buckets = Array.from({ length: count }, (_, index) => ({ at: bounds.start + index * bucketMs, down: 0, up: 0 }));
+        (samples || []).forEach(sample => {
+          if (!sample || sample.at < bounds.start || sample.at > now) return;
+          const index = Math.floor((sample.at - bounds.start) / bucketMs);
+          if (index < 0 || index >= count) return;
+          buckets[index].down += Math.max(0, Number(sample.down) || 0);
+          buckets[index].up += Math.max(0, Number(sample.up) || 0);
         });
-        const peak = Math.max(1, ...hours.map(item => item.down + item.up));
+        return { buckets, bucketMs, start: bounds.start, end: bounds.last };
+      }
+
+      function historyTimelineWidth(count, pixels, available) {
+        return Math.max(available, Math.max(1, count - 1) * pixels);
+      }
+
+      function historyTimeLabel(at, withDate) {
+        const date = new Date(at);
+        const time = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+        return withDate ? (date.getMonth() + 1) + '/' + date.getDate() + ' ' + time : time;
+      }
+
+      function drawHistoryAxis(timeline, start, end, width) {
+        const axis = document.createElement('div');
+        axis.className = 'history-axis';
+        const duration = Math.max(60000, end - start);
+        const minimum = duration / Math.max(1, width / 100);
+        const interval = [1, 5, 15, 30, 60, 180, 360, 1440].map(value => value * 60000).find(value => value >= minimum) || 86400000;
+        const ticks = [start];
+        for (let at = Math.ceil(start / interval) * interval; at < end; at += interval) {
+          const x = (at - start) / duration * width;
+          if (x >= 75 && x <= width - 75) ticks.push(at);
+        }
+        if (end > start) ticks.push(end);
+        ticks.forEach(at => {
+          const tick = document.createElement('span');
+          tick.style.left = ((at - start) / duration * width) + 'px';
+          tick.textContent = historyTimeLabel(at, historyRange.endsWith('d'));
+          tick.title = historyTimeLabel(at, true);
+          tick.dataset.at = String(at);
+          axis.append(tick);
+        });
+        timeline.append(axis);
+      }
+
+      function drawHistory(samples) {
+        const rangeMs = HISTORY_RANGES[historyRange] * 60000;
+        const data = historyTrafficSeries(samples, Date.now(), rangeMs);
         historyChart.replaceChildren();
-        if (!samples.length) {
+        if (!data.buckets.some(bucket => bucket.down || bucket.up)) {
           historyChart.innerHTML = '<span class="history-empty">' + t('history.emptyTraffic') + '</span>';
           return;
         }
-        hours.forEach(item => {
+        const peak = Math.max(1, ...data.buckets.map(item => Math.max(item.down, item.up)));
+        const width = Math.max(historyScroll.clientWidth, data.buckets.length * 32);
+        const timeline = document.createElement('div');
+        timeline.className = 'history-timeline';
+        timeline.style.width = width + 'px';
+        const plot = document.createElement('div');
+        plot.className = 'history-traffic-plot';
+        plot.style.gridTemplateColumns = 'repeat(' + data.buckets.length + ', minmax(0, 1fr))';
+        data.buckets.forEach(item => {
           const group = document.createElement('span');
           group.className = 'history-hour';
-          group.title = t('history.barTitle', { down: formatBytes(item.down), up: formatBytes(item.up) });
+          group.dataset.at = String(item.at);
+          group.dataset.down = String(item.down);
+          group.dataset.up = String(item.up);
+          group.title = historyTimeLabel(item.at, true) + ' — ' + historyTimeLabel(Math.min(item.at + data.bucketMs, Date.now()), true) + '\n' + t('history.barTitle', { down: formatBytes(item.down), up: formatBytes(item.up) });
           const down = document.createElement('span');
           down.className = 'history-bar-down';
-          down.style.height = Math.max(item.down ? 2 : 0, item.down / peak * 100) + 'px';
+          down.style.height = Math.max(item.down ? 2 : 0, item.down / peak * 110) + 'px';
           const up = document.createElement('span');
           up.className = 'history-bar-up';
-          up.style.height = Math.max(item.up ? 2 : 0, item.up / peak * 100) + 'px';
+          up.style.height = Math.max(item.up ? 2 : 0, item.up / peak * 110) + 'px';
           group.append(down, up);
-          historyChart.append(group);
+          plot.append(group);
         });
+        timeline.append(plot);
+        drawHistoryAxis(timeline, data.start, data.end, width);
+        historyChart.append(timeline);
       }
 
       const HISTORY_SPAN_MS = 24 * 60 * 60 * 1000;
@@ -1572,9 +1690,9 @@
 
       // 历史均速与方格均速同一口径：窗口内字节 ÷ 窗口内该方向有流量的秒数。
       // 历史库按分钟保存字节与活跃秒，曲线按分钟重放所选统计窗口的均速。
-      function historySpeedSeries(samples, now, windowMs) {
+      function historySpeedSeries(samples, now, windowMs, rangeMs = HISTORY_SPAN_MS) {
         const span = Math.max(1, Math.round(windowMs / HISTORY_MINUTE_MS));
-        const count = Math.round(HISTORY_SPAN_MS / HISTORY_MINUTE_MS);
+        const count = Math.max(1, Math.round(rangeMs / HISTORY_MINUTE_MS));
         const last = Math.floor(now / HISTORY_MINUTE_MS) * HISTORY_MINUTE_MS;
         const since = last - (count - 1) * HISTORY_MINUTE_MS;
         const byMinute = new Map();
@@ -1632,16 +1750,6 @@
         return bytes > 0 ? null : 0;
       }
 
-      function historySpeedViewport(series) {
-        const hasValue = point => point.down !== null || point.up !== null;
-        const first = series.findIndex(hasValue);
-        if (first < 0) return [];
-        let last = series.length - 1;
-        while (last > first && !hasValue(series[last])) last -= 1;
-        // Only trim the empty ends; gaps inside the time range stay in place.
-        return series.slice(first, last + 1);
-      }
-
       function historySpeedX(index, count) {
         return count > 1 ? index * 100 / (count - 1) : 50;
       }
@@ -1650,8 +1758,9 @@
         historySpeedChart.replaceChildren();
         const now = Date.now();
         const windowMs = averageWindowMs();
-        const series = historySpeedViewport(historySpeedSeries(samples, now, windowMs));
-        const earliestRelevant = now - HISTORY_SPAN_MS - windowMs;
+        const rangeMs = HISTORY_RANGES[historyRange] * 60000;
+        const series = historySpeedSeries(samples, now, windowMs, rangeMs);
+        const earliestRelevant = now - rangeMs - windowMs;
         const hasLegacy = samples.some(sample => sample.at >= earliestRelevant && (
           historyActiveSeconds(sample.downSeconds, Number(sample.down) || 0) === null ||
           historyActiveSeconds(sample.upSeconds, Number(sample.up) || 0) === null
@@ -1669,7 +1778,7 @@
             if (value === null) { drawing = false; return ''; }
             const command = drawing ? 'L' : 'M';
             drawing = true;
-            const point = historySpeedX(index, series.length).toFixed(2) + ' ' + toY(value);
+            const point = historySpeedX(index, series.length).toFixed(5) + ' ' + toY(value);
             return command + point + (command === 'M' ? ' l0 0' : '');
           }).filter(Boolean).join(' ');
         };
@@ -1679,13 +1788,19 @@
         parts.push('<path class="history-speed-line down" d="' + path('down') + '"></path>');
         parts.push('<path class="history-speed-line up" d="' + path('up') + '"></path>');
         parts.push('</svg>');
-        historySpeedChart.innerHTML = parts.join('');
+        const width = historyTimelineWidth(series.length, 4, historyScroll.clientWidth);
+        const timeline = document.createElement('div');
+        timeline.className = 'history-timeline';
+        timeline.style.width = width + 'px';
+        timeline.innerHTML = parts.join('');
+        drawHistoryAxis(timeline, series[0].at, series.at(-1).at, width);
+        historySpeedChart.append(timeline);
         bindHistorySpeedHover(series);
         if (hasLegacy) {
           const note = document.createElement('span');
           note.className = 'history-speed-legacy-note';
           note.textContent = t('history.legacySpeedNote');
-          historySpeedChart.append(note);
+          historyPanel.append(note);
         }
       }
 
@@ -1698,7 +1813,7 @@
         const tip = document.createElement('div');
         tip.className = 'history-speed-tip';
         tip.hidden = true;
-        historySpeedChart.append(tip);
+        historyPanel.append(tip);
         const hide = () => { tip.hidden = true; };
         svg.addEventListener('mouseleave', hide);
         svg.addEventListener('mousemove', event => {
@@ -1708,8 +1823,7 @@
           const index = Math.round(ratio * (series.length - 1));
           const point = series[index];
           if (!point) return;
-          const date = new Date(point.at);
-          const time = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+          const time = historyTimeLabel(point.at, true);
           tip.innerHTML = '<span class="time">' + time + '</span>' +
             '<span class="down">' + t('history.pointDown', { value: formatRate(point.down) }) + '</span>' +
             '<span class="up">' + t('history.pointUp', { value: formatRate(point.up) }) + '</span>';
@@ -1717,7 +1831,7 @@
           tip.dataset.down = point.down === null ? '' : String(point.down);
           tip.dataset.up = point.up === null ? '' : String(point.up);
           tip.hidden = false;
-          const chartBox = historySpeedChart.getBoundingClientRect();
+          const chartBox = historyPanel.getBoundingClientRect();
           const tipBox = tip.getBoundingClientRect();
           const left = Math.min(Math.max(0, event.clientX - chartBox.left - tipBox.width / 2), Math.max(0, chartBox.width - tipBox.width));
           const top = Math.min(Math.max(0, event.clientY - chartBox.top - tipBox.height - 8), Math.max(0, chartBox.height - tipBox.height));
@@ -1733,8 +1847,14 @@
       }
 
       function renderHistoryTab() {
+        const position = historyViewport[historyTab];
+        historyRangeSelect.value = historyRange;
+        const bounds = historyRangeBounds(Date.now(), HISTORY_RANGES[historyRange] * 60000);
+        document.getElementById('historyRangeLabel').textContent = historyTimeLabel(bounds.start, true) + ' — ' + historyTimeLabel(bounds.last, true);
+        historyPanel.querySelectorAll('.history-speed-tip, .history-speed-legacy-note').forEach(node => node.remove());
         if (historyTab === 'speed') drawHistorySpeed(historySamples);
         else drawHistory(historySamples);
+        historyScroll.scrollLeft = !position || position.atEnd ? historyScroll.scrollWidth : position.left;
       }
 
       function setHistoryTab(tab) {
@@ -1753,7 +1873,13 @@
       // 切换标签时重新读取一次历史，让曲线反映面板打开期间新增的样本。
       function refreshHistoryTab() {
         if (!historyTarget) { renderHistoryTab(); return; }
-        loadHistory(historyTarget).then(samples => { historySamples = samples; renderHistoryTab(); });
+        const version = ++historyLoadVersion;
+        const target = historyTarget;
+        loadHistory(target).then(samples => {
+          if (version !== historyLoadVersion || historyPanel.hidden || historyTarget !== target) return;
+          historySamples = samples;
+          renderHistoryTab();
+        });
       }
 
       async function pollConnections() {
@@ -1910,6 +2036,29 @@
       });
       document.getElementById('copySummary').addEventListener('click', copySummary);
       document.getElementById('closeDialog').addEventListener('click', closeHistory);
+      historyRangeSelect.addEventListener('change', () => {
+        historyRange = Object.hasOwn(HISTORY_RANGES, historyRangeSelect.value) ? historyRangeSelect.value : '24h';
+        try { localStorage.setItem(HISTORY_RANGE_KEY, historyRange); } catch { /* Keep the selection for this session. */ }
+        historyViewport = { traffic: null, speed: null };
+        refreshHistoryTab();
+      });
+      historyScroll.addEventListener('scroll', () => {
+        historyViewport[historyTab] = { left: historyScroll.scrollLeft,
+          atEnd: historyScroll.scrollWidth - historyScroll.clientWidth - historyScroll.scrollLeft < 2 };
+        const tip = historyPanel.querySelector('.history-speed-tip');
+        if (tip) tip.hidden = true;
+      });
+      historyScroll.addEventListener('wheel', event => {
+        if (event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+        const before = historyScroll.scrollLeft;
+        historyScroll.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? historyScroll.clientWidth : 1);
+        if (historyScroll.scrollLeft !== before) event.preventDefault();
+      }, { passive: false });
+      historyScroll.addEventListener('keydown', event => {
+        if (event.key !== 'Home' && event.key !== 'End') return;
+        event.preventDefault();
+        historyScroll.scrollLeft = event.key === 'Home' ? 0 : historyScroll.scrollWidth;
+      });
       historyTabs.forEach(button => {
         button.addEventListener('click', () => setHistoryTab(button.dataset.tab));
         button.addEventListener('keydown', event => {
