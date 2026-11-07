@@ -12,9 +12,9 @@ function extract(name) {
   }
 }
 const rangeCode = source.match(/const HISTORY_RANGES = [^;]+;/)[0];
-const { historyRangeBounds, historyTrafficSeries, historyTimelineWidth } = new Function([
-  extract('historyRangeBounds'), extract('historyTrafficSeries'), extract('historyTimelineWidth'),
-  'return { historyRangeBounds, historyTrafficSeries, historyTimelineWidth };'
+const { historyRangeBounds, historyTrafficSeries, historySpanWidth } = new Function([
+  extract('historyRangeBounds'), extract('historyTrafficSeries'), extract('historySpanWidth'),
+  'return { historyRangeBounds, historyTrafficSeries, historySpanWidth };'
 ].join('\n'))();
 const minute = 60000;
 const now = Math.floor(1700000000000 / minute) * minute;
@@ -56,10 +56,14 @@ test('short spans use five-minute traffic bars and long spans keep hourly detail
   assert.equal(historyTrafficSeries([], now, 30 * 86400000).buckets.length, 720);
 });
 
-test('minute points have fixed readable spacing, including the 30-day timeline', () => {
-  assert.equal(historyTimelineWidth(60, 4, 356), 356);
-  assert.equal(historyTimelineWidth(1440, 4, 356), 5756);
-  assert.equal(historyTimelineWidth(43200, 4, 356), 172796);
+test('without a saved zoom every total range initially fits the complete timeline', () => {
+  for (const minutes of [60, 360, 1440, 10080, 43200]) {
+    for (const minimum of [5 * minute, 60 * minute]) {
+      for (const span of [null, undefined, 0, -1, NaN, Infinity]) {
+        assert.equal(historySpanWidth((minutes - 1) * minute, span, minimum, 356), 356);
+      }
+    }
+  }
   assert.match(source, /historySpeedX\(index, series\.length\)\.toFixed\(5\)/);
 });
 
@@ -116,11 +120,11 @@ test('zoom preserves the cursor time across a wide range of positions and scales
 test('saved zoom does not change total range and restores after visiting a shorter range', () => {
   const { historySpanWidth } = zoom;
   const preferred = 120 * minute;
-  assert.equal(historySpanWidth(59 * minute, preferred, 5 * minute, 356, 356), 356);
-  assert.equal(historySpanWidth(359 * minute, preferred, 5 * minute, 356, 1436), Math.round(359 / 120 * 356));
-  assert.equal(historySpanWidth(1439 * minute, preferred, 5 * minute, 356, 5756), Math.round(1439 / 120 * 356));
-  assert.equal(historySpanWidth(1439 * minute, null, 5 * minute, 356, 5756), 5756);
-  assert.equal(historySpanWidth(1439 * minute, 5 * minute, 60 * minute, 356, 768), Math.round(1439 / 60 * 356));
+  assert.equal(historySpanWidth(59 * minute, preferred, 5 * minute, 356), 356);
+  assert.equal(historySpanWidth(359 * minute, preferred, 5 * minute, 356), Math.round(359 / 120 * 356));
+  assert.equal(historySpanWidth(1439 * minute, preferred, 5 * minute, 356), Math.round(1439 / 120 * 356));
+  assert.equal(historySpanWidth(1439 * minute, null, 5 * minute, 356), 356);
+  assert.equal(historySpanWidth(1439 * minute, 5 * minute, 60 * minute, 356), Math.round(1439 / 60 * 356));
 });
 
 test('visible date boundaries follow scrolling and fit-to-range correctly', () => {
@@ -151,4 +155,20 @@ test('zoom resizes the existing plot without replacing or re-aggregating its sam
 
 test('the minute cursor uses subpixel-safe precision even at maximum 30-day zoom', () => {
   assert.match(extract('bindHistorySpeedHover'), /historySpeedX\(index, series\.length\)\.toFixed\(5\)/);
+});
+
+
+test('the same sizing function applies full-range and customized widths to the real plot', () => {
+  const size = new Function(extract('sizeHistoryTimeline') + '; return sizeHistoryTimeline;')();
+  const properties = {};
+  const plot = { children: Array(720), style: { setProperty: (key, value) => { properties[key] = value; } } };
+  const timeline = { style: {}, querySelector: () => plot };
+  size(timeline, 356);
+  assert.equal(timeline.style.width, '356px');
+  assert.ok(parseFloat(plot.style.gap) < 1);
+  assert.ok(parseFloat(properties['--history-bar-gap']) < 1);
+  size(timeline, 30000);
+  assert.equal(timeline.style.width, '30000px');
+  assert.equal(plot.style.gap, '3px');
+  assert.equal(properties['--history-bar-gap'], '1px');
 });

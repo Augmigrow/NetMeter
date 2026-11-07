@@ -545,7 +545,7 @@
             const span = saved?.[tab];
             if (Number.isFinite(span) && span >= 60000 && span <= 30 * 86400000) spans[tab] = span;
           }
-        } catch { /* Invalid or unavailable storage keeps the initial density. */ }
+        } catch { /* Invalid or unavailable storage keeps the full-range initial view. */ }
         return spans;
       }
 
@@ -1644,18 +1644,14 @@
         return { buckets, bucketMs, start: bounds.start, end: bounds.last };
       }
 
-      function historyTimelineWidth(count, pixels, available) {
-        return Math.max(available, Math.max(1, count - 1) * pixels);
-      }
-
       function historyTimeLabel(at, withDate) {
         const date = new Date(at);
         const time = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
         return withDate ? (date.getMonth() + 1) + '/' + date.getDate() + ' ' + time : time;
       }
 
-      function historySpanWidth(duration, span, minimum, available, fallback) {
-        if (!Number.isFinite(span) || span <= 0) return Math.max(available, fallback);
+      function historySpanWidth(duration, span, minimum, available) {
+        if (!Number.isFinite(span) || span <= 0) return available;
         const bounded = Math.min(duration, Math.max(minimum, span));
         return Math.max(available, Math.round(duration * available / bounded));
       }
@@ -1698,11 +1694,11 @@
         }
       }
 
-      function drawHistoryAxis(timeline, start, end, fallback, minimum) {
+      function drawHistoryAxis(timeline, start, end, minimum) {
         timeline.dataset.start = String(start);
         timeline.dataset.end = String(end);
         timeline.dataset.minimumSpan = String(minimum);
-        const width = historySpanWidth(end - start, historyVisibleSpans[historyTab], minimum, historyScroll.clientWidth, fallback);
+        const width = historySpanWidth(end - start, historyVisibleSpans[historyTab], minimum, historyScroll.clientWidth);
         sizeHistoryTimeline(timeline, width);
         const axis = document.createElement('div');
         axis.className = 'history-axis';
@@ -1770,7 +1766,7 @@
         const minimum = Number(timeline.dataset.minimumSpan);
         const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? available : 1);
         const span = historyZoomSpan(duration * available / oldWidth, delta, minimum, duration);
-        const newWidth = historySpanWidth(duration, span, minimum, available, oldWidth);
+        const newWidth = historySpanWidth(duration, span, minimum, available);
         const anchor = event.clientX - historyScroll.getBoundingClientRect().left;
         const left = historyZoomPosition(oldWidth, newWidth, available, historyScroll.scrollLeft, anchor);
         historyVisibleSpans[historyTab] = span;
@@ -1789,10 +1785,8 @@
           return;
         }
         const peak = Math.max(1, ...data.buckets.map(item => Math.max(item.down, item.up)));
-        const width = Math.max(historyScroll.clientWidth, data.buckets.length * 32);
         const timeline = document.createElement('div');
         timeline.className = 'history-timeline';
-        timeline.style.width = width + 'px';
         const plot = document.createElement('div');
         plot.className = 'history-traffic-plot';
         plot.style.gridTemplateColumns = 'repeat(' + data.buckets.length + ', minmax(0, 1fr))';
@@ -1813,7 +1807,7 @@
           plot.append(group);
         });
         timeline.append(plot);
-        drawHistoryAxis(timeline, data.start, data.end, width, data.bucketMs);
+        drawHistoryAxis(timeline, data.start, data.end, data.bucketMs);
         historyChart.append(timeline);
       }
 
@@ -1920,12 +1914,10 @@
         parts.push('<path class="history-speed-line down" d="' + path('down') + '"></path>');
         parts.push('<path class="history-speed-line up" d="' + path('up') + '"></path>');
         parts.push('</svg>');
-        const width = historyTimelineWidth(series.length, 4, historyScroll.clientWidth);
         const timeline = document.createElement('div');
         timeline.className = 'history-timeline';
-        timeline.style.width = width + 'px';
         timeline.innerHTML = parts.join('');
-        drawHistoryAxis(timeline, series[0].at, series.at(-1).at, width, 5 * 60000);
+        drawHistoryAxis(timeline, series[0].at, series.at(-1).at, 5 * 60000);
         historySpeedChart.append(timeline);
         bindHistorySpeedHover(series);
         if (hasLegacy) {

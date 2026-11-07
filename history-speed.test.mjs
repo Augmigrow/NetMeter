@@ -25,13 +25,13 @@ function loadSpeed() {
   const code = [
     extractFunction('historySpeedSeries'),
     extractFunction('historyActiveSeconds'),
-    extractFunction('historyTimelineWidth'),
+    extractFunction('historySpanWidth'),
     extractFunction('historySpeedX'),
     extractFunction('windowRates'),
     'const HISTORY_SPAN_MS = 24 * 60 * 60 * 1000;',
     'const HISTORY_MINUTE_MS = 60000;'
   ].join('\n');
-  return new Function(`${code}\nreturn { historySpeedSeries, historyActiveSeconds, historyTimelineWidth, historySpeedX, windowRates };`)();
+  return new Function(`${code}\nreturn { historySpeedSeries, historyActiveSeconds, historySpanWidth, historySpeedX, windowRates };`)();
 }
 
 const MINUTE = 60000;
@@ -56,8 +56,8 @@ test('the speed series covers the last 24 hours at minute resolution', () => {
   assert.equal(series[0].at <= now - 23 * 60 * MINUTE, true);
 });
 
-test('selected time ranges retain empty ends and minute values instead of squeezing valid samples', () => {
-  const { historySpeedSeries, historyTimelineWidth, historySpeedX } = loadSpeed();
+test('full-range initial views retain empty ends and original minute values', () => {
+  const { historySpeedSeries, historySpanWidth, historySpeedX } = loadSpeed();
   const now = Math.floor(1700000000000 / MINUTE) * MINUTE;
   const samples = [{ at: now - 10 * MINUTE, down: 600, up: 0, downSeconds: 6, upSeconds: 0 }];
   const series = historySpeedSeries(samples, now, 2 * MINUTE, 60 * MINUTE);
@@ -69,8 +69,8 @@ test('selected time ranges retain empty ends and minute values instead of squeez
   assert.equal(series.at(-1).down, null);
   assert.equal(historySpeedX(0, 60), 0);
   assert.equal(historySpeedX(59, 60), 100);
-  assert.equal(historyTimelineWidth(60, 4, 356), 356);
-  assert.equal(historyTimelineWidth(1440, 4, 356), 5756);
+  assert.equal(historySpanWidth(59 * MINUTE, null, 5 * MINUTE, 356), 356);
+  assert.equal(historySpanWidth(1439 * MINUTE, null, 5 * MINUTE, 356), 356);
 });
 
 test('the curve replays the same active-second average as the tiles', () => {

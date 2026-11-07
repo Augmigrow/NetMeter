@@ -64,9 +64,22 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
   }
   let data = await state();
   check('actual history window retains 380x306 and independent settings', win.getContentSize().join('x') === '380x306' && settings.isVisible(), win.getContentSize());
-  check('24h traffic retains 24 readable bars and scrolls horizontally', data.bars === 24 && data.width > data.client && data.left > 0, data);
+  check('24h traffic initially displays its entire selected range', data.bars === 24 && data.width === data.client && data.left === 0, data);
   check('range header shows visible dated time boundaries and duration', /\d+\/\d+ \d{2}:\d{2} — \d+\/\d+ \d{2}:\d{2}/.test(data.label) && /可视/.test(data.visible) && data.visibleEnd - data.visibleStart < 24 * 3600000, data);
   check('only timeline overflows, never the outer window or vertically', data.outerWidth === data.innerWidth && data.scrollHeight <= data.height && data.bottom <= data.innerHeight, data);
+  for (const language of ['zh', 'en']) {
+    await run(`(() => { const select = document.getElementById('language'); select.value = '${language}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    for (const tab of ['traffic', 'speed']) {
+      await run(`document.getElementById('historyTab${tab === 'traffic' ? 'Traffic' : 'Speed'}').click()`); await pause(180);
+      const initial = await state();
+      check(language + ' ' + tab + ' defaults to the full 24h point extent', initial.width === initial.client && initial.left === 0 && initial.visibleEnd - initial.visibleStart === 1439 * 60000, initial);
+      writeFileSync(path.join(root, 'docs', 'screenshots', 'history-' + tab + '-' + language + '.png'), (await win.webContents.capturePage()).toPNG());
+    }
+  }
+  await run("(() => { const select = document.getElementById('language'); select.value = 'zh'; select.dispatchEvent(new Event('change', { bubbles: true })); document.getElementById('historyTabTraffic').click(); })()"); await pause(180);
+  await zoomWheel(-240); await zoomWheel(-240);
+  await run("document.getElementById('historyScroll').scrollLeft = 1000000"); await pause(80);
+  data = await state();
   await run("document.getElementById('historyScroll').dispatchEvent(new WheelEvent('wheel', { deltaY: -120, cancelable: true }))");
   await pause(100);
   check('ordinary mouse wheel scrolls to older traffic', (await state()).left < data.left, await state());
@@ -81,7 +94,7 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
   await run("document.getElementById('historyTabSpeed').click()");
   await pause(250);
   data = await state();
-  check('minute curves use four pixels per minute, not fit-to-window compression', data.paths === 2 && data.width === 5756 && data.left > 0, data);
+  check('minute curves independently default to the full range before customization', data.paths === 2 && data.width === data.client && data.left === 0, data);
   async function hover() {
     return run(`(() => { const s = document.getElementById('historyScroll').getBoundingClientRect(); const svg = document.querySelector('.history-speed-svg'); const b = svg.getBoundingClientRect(); svg.dispatchEvent(new MouseEvent('mousemove', { clientX: s.left + s.width * .6, clientY: b.top + 65, bubbles: true })); const tip = document.querySelector('.history-speed-tip'); const at = Number(tip.dataset.at); const samples = window.__fixture.filter(sample => sample.at <= at && sample.at > at - 5 * 60000); const down = samples.reduce((n, sample) => n + sample.down, 0) / samples.reduce((n, sample) => n + sample.downSeconds, 0); const up = samples.reduce((n, sample) => n + sample.up, 0) / samples.reduce((n, sample) => n + sample.upSeconds, 0); const box = tip.getBoundingClientRect(); return { down: Number(tip.dataset.down), expectedDown: down, up: Number(tip.dataset.up), expectedUp: up, visible: !tip.hidden, text: tip.textContent, left: box.left, right: box.right, width: innerWidth }; })()`);
   }
@@ -119,28 +132,28 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
       if (tab === 'speed') await hover();
       const visibleText = (await state()).visible;
       check(language + ' visible span is localized', language === 'en' ? /^View /.test(visibleText) && !/[\u4e00-\u9fff]/.test(visibleText) : /^可视 /.test(visibleText), visibleText);
-      writeFileSync(path.join(root, 'docs', 'screenshots', 'history-' + (tab === 'speed' ? 'speed' : 'traffic') + '-' + language + '.png'), (await win.webContents.capturePage()).toPNG());
-      check(language + ' ' + tab + ' scrollable history screenshot saved', true, await state());
+      check(language + ' ' + tab + ' keeps customized zoom on language switch', (await state()).width === (tab === 'traffic' ? trafficWidth : rememberedSpeedWidth), await state());
     }
   }
-  await run("document.getElementById('historyScroll').scrollLeft = 1200"); await pause(100);
+  const rememberedScroll = Math.floor(Math.min(1200, ((await state()).width - (await state()).client) / 2));
+  await run("document.getElementById('historyScroll').scrollLeft = " + rememberedScroll); await pause(100);
   await run("document.getElementById('historyTabTraffic').click()"); await pause(180);
   await run("document.getElementById('historyTabSpeed').click()"); await pause(180);
-  check('switching tabs preserves each chart scroll position', (await state()).left === 1200, await state());
+  check('switching tabs preserves each chart scroll position', (await state()).left === rememberedScroll, await state());
   await run("document.getElementById('closeDialog').click(); document.querySelector('.host-button').click()"); await pause(250);
   check('zoom survives close and reopen', (await state()).width === rememberedSpeedWidth, await state());
   await win.webContents.reload(); await pause(450); await run("document.querySelector('.host-button').click()"); await pause(250);
   check('zoom is restored after renderer restart', (await state()).width === rememberedSpeedWidth, await state());
   await run("document.getElementById('historyTabTraffic').click()"); await pause(180);
   check('each chart zoom is independently persisted', (await state()).width === trafficWidth, await state());
-  // Return to the uncustomized density for the pre-existing total-range assertions.
+  // Return to a fresh full-range view for each total-range assertion.
   await run("localStorage.removeItem('netmeter-history-visible-spans'); localStorage.setItem('netmeter-history-tab', 'speed')");
   await win.webContents.reload(); await pause(450); await run("document.querySelector('.host-button').click()"); await pause(250);
-  for (const [range, expected] of [['1h', 356], ['6h', 1436], ['7d', 40316], ['30d', 172796]]) {
+  for (const [range, minutes] of [['1h', 60], ['6h', 360], ['24h', 1440], ['7d', 10080], ['30d', 43200]]) {
     await run(`(() => { const select = document.getElementById('historyRange'); select.value = '${range}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await pause(250);
     data = await state();
-    check(range + ' range has a true minute timeline and no invalid path', data.width === expected && await run("!document.querySelector('.history-speed-svg').innerHTML.includes('NaN')"), data);
+    check(range + ' fresh range is entirely visible with no invalid minute path', data.width === data.client && data.left === 0 && data.visibleEnd - data.visibleStart === (minutes - 1) * 60000 && await run("!document.querySelector('.history-speed-svg').innerHTML.includes('NaN')"), data);
   }
   await run("document.getElementById('closeDialog').click(); document.querySelector('.host-button').click()"); await pause(250);
   check('range is remembered on close and reopen', (await state()).range === '30d', await state());
@@ -176,7 +189,6 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
   const scrollingFrom = hourlyTraffic.visibleStart;
   await run("document.getElementById('historyScroll').dispatchEvent(new WheelEvent('wheel', { deltaY: -120, cancelable: true }))"); await pause(80);
   check('ordinary wheel still scrolls the zoomed timeline and updates its visible dates', (await state()).visibleStart < scrollingFrom && (await state()).visible === hourlyTraffic.visible, await state());
-  await run("document.querySelector('.host-button')?.click()");
   await run("document.getElementById('historyPanel').classList.add('light')");
   check('light theme keeps the range selector readable', await run("getComputedStyle(document.getElementById('historyRange')).backgroundColor === 'rgb(247, 250, 252)'"), true);
   check('no renderer errors', errors.length === 0, errors);
