@@ -33,7 +33,7 @@ function payload(now) {
   const bytes = Math.floor(Math.min(5000, Math.max(0, phase - 2000)) / 10);
   const cumulative = cycle * 500 + bytes;
   const active = phase >= 2000 && phase < 7000;
-  return { downloadTotal: cumulative, uploadTotal: cumulative * 2, connections: active ? [{ id: 'intentionally-reused', start: new Date(origin + cycle * 15000 + 2000).toISOString(), metadata: { host: 'example.com', sourceIP: '127.0.0.1', sourcePort: 1000, destinationIP: '1.2.3.4', destinationPort: 443, network: 'tcp' }, download: bytes, upload: bytes * 2 }] : [] };
+  return { downloadTotal: cumulative, uploadTotal: cumulative * 2, connections: active ? [{ id: 'intentionally-reused', start: new Date(origin + cycle * 15000 + 2000).toISOString(), metadata: { host: 'example.com', sourceIP: '127.0.0.1', sourcePort: 1000, destinationIP: '1.2.3.4', destinationPort: 443, network: 'tcp' }, download: bytes, upload: bytes * 2 }] : null };
 }
 setTimeout(() => { log.push('ERROR bounded probe deadline exceeded'); flush(); app.exit(2); }, duration + 20000);
 (async () => {

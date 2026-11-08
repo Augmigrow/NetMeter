@@ -120,3 +120,21 @@ test('collector APIs are private to loopback, contain no secret, and import hist
   assert.equal((await fetch(base + '/api/collector/state', { headers: { Origin: 'https://evil.example' } })).status, 403);
   assert.equal((await postJson(base + '/api/collector/settings', { targets: 'not-array' })).status, 400);
 });
+
+test('the connections proxy accepts null idle lists with counters but rejects malformed payloads', async () => {
+  let payload = { connections: null, downloadTotal: 100, uploadTotal: 200 };
+  const app = createNetMeterServer({ backgroundCollection: false,
+    initialConfig: { enabled: true, address: '127.0.0.1:9097', secret: 'synthetic' },
+    fetchImpl: async () => new Response(JSON.stringify(payload))
+  });
+  const base = 'http://127.0.0.1:' + await listen(app);
+  const idle = await fetch(base + '/api/connections');
+  assert.equal(idle.status, 200);
+  assert.deepEqual(await idle.json(), payload);
+  for (const invalid of [null, {}, { connections: null }, { connections: 'invalid' }]) {
+    payload = invalid;
+    const response = await fetch(base + '/api/connections');
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: 'invalid_controller_response' });
+  }
+});

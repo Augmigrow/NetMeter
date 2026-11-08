@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TrafficLedger, GLOBAL_TARGET } from './traffic-ledger.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { TrafficLedger, GLOBAL_TARGET, connectionIdentity } from './traffic-ledger.mjs';
 import { TrafficCollector } from './traffic-collector.mjs';
 
 const BASE = Date.UTC(2026, 10, 8, 12, 0, 0);
@@ -221,4 +222,108 @@ test('ledger shutdown is idempotent for server-close and quit cleanup paths', ()
   const ledger = fixture();
   ledger.close();
   assert.doesNotThrow(() => ledger.close());
+});
+
+test('null idle connections still record ended download/upload bytes in their observation minute', () => {
+  const l = fixture();
+  try {
+    l.ingest({ connections: null, downloadTotal: 1000, uploadTotal: 2000 }, BASE + 58000, 'controller');
+    l.ingest({ connections: null, downloadTotal: 1100, uploadTotal: 2300 }, BASE + 59000, 'controller');
+    l.ingest({ connections: null, downloadTotal: 1170, uploadTotal: 2350 }, BASE + 60010, 'controller');
+    l.ingest({ connections: null, downloadTotal: 1170, uploadTotal: 2350 }, BASE + 61000, 'controller');
+    const state = l.snapshot(BASE + 61000);
+    assert.equal(state.count, 0);
+    assert.equal(state.global.down, 170);
+    assert.equal(state.global.up, 350);
+    assert.equal(state.metrics[0].totalDown, 0);
+    assert.equal(state.coverage.unobservedDown, 170);
+    assert.equal(state.coverage.unobservedUp, 350);
+    assert.deepEqual(l.history(GLOBAL_TARGET, BASE, BASE + 120000).map(r => [r.at - BASE, r.down, r.up]), [[0, 100, 300], [60000, 70, 50]]);
+  } finally { l.close(); }
+});
+
+test('malformed empty snapshots cannot advance checkpoints or corrupt cumulative baselines', () => {
+  const l = fixture();
+  try {
+    feed(l, [], 1000, 0);
+    for (const payload of [null, {}, { connections: {} }, { connections: null }, { connections: null, downloadTotal: -1, uploadTotal: 20 }, { connections: null, downloadTotal: 50, uploadTotal: '20' }]) {
+      assert.throws(() => l.ingest(payload, BASE + 1000, 'controller'), /invalid_controller_response/);
+      assert.equal(l.get('checkpoint').at, BASE);
+    }
+    feed(l, [], 1100, 2000);
+    assert.equal(l.snapshot().global.down, 100);
+  } finally { l.close(); }
+});
+
+test('the collector remains connected across null idle snapshots and includes closing tails once', async () => {
+  const l = fixture();
+  let now = BASE, payload = { connections: null, downloadTotal: 0, uploadTotal: 0 };
+  const c = new TrafficCollector({ ledger: l, now: () => now, timers: { setTimeout: () => 1, clearTimeout() {} }, fetchImpl: async () => new Response(JSON.stringify(payload)) });
+  try {
+    c.configure({ enabled: true, address: '127.0.0.1:1', secret: 'synthetic' }); c.running = true;
+    await c.tick();
+    now += 1000; payload = { connections: [connection(100)], downloadTotal: 100, uploadTotal: 100 }; await c.tick();
+    now += 1000; payload = { connections: null, downloadTotal: 170, uploadTotal: 190 }; await c.tick();
+    now += 1000; await c.tick();
+    assert.equal(c.status, 'connected');
+    assert.equal(c.observations.length, 4);
+    assert.equal(l.snapshot().global.down, 170);
+    assert.equal(l.snapshot().global.up, 190);
+    assert.equal(total(l).totalDown, 100);
+  } finally { c.stop(); l.close(); }
+});
+
+test('expired dedup rows are compacted without replaying old lifetimes, including after restart', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'netmeter-ledger-retention-'));
+  const path = join(dir, 'traffic.sqlite'), late = 7 * 86400000 + 10000;
+  let l;
+  try {
+    l = fixture(path); feed(l, [], 0, 0); feed(l, [connection(100)], 100, 1000);
+    feed(l, [], 100, late);
+    assert.equal(l.db.prepare('SELECT COUNT(*) count FROM seen').get().count, 0);
+    assert.equal(l.get('checkpoint').epochAt, BASE + 10000);
+    l.close(); l = new TrafficLedger(path);
+    feed(l, [connection(100, { id: 'changed' })], 100, late + 1000);
+    feed(l, [connection(130, { id: 'changed-again' })], 130, late + 2000);
+    assert.equal(total(l).totalDown, 130);
+    assert.equal(l.snapshot().global.down, 130);
+  } finally { l?.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('compaction retains recently observed long-lived connections and accepts new lifetimes reusing IDs', () => {
+  const l = fixture(), week = 7 * 86400000;
+  try {
+    feed(l, [], 0, 0); feed(l, [connection(100)], 100, 1000);
+    feed(l, [connection(150)], 150, week - 1000);
+    feed(l, [connection(180)], 180, week + 10000);
+    feed(l, [connection(20, { start: BASE + week + 10500 })], 200, week + 11000);
+    assert.equal(total(l).totalDown, 200);
+    assert.equal(l.db.prepare('SELECT COUNT(*) count FROM seen').get().count, 2);
+    assert.equal(l.snapshot().global.down, 200);
+  } finally { l.close(); }
+});
+
+test('legacy three-column dedup tables migrate atomically without losing high-water marks', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'netmeter-ledger-migration-'));
+  const path = join(dir, 'traffic.sqlite');
+  let l;
+  try {
+    l = fixture(path); feed(l, [], 0, 0); feed(l, [connection(100)], 100, 1000); l.close();
+    const old = new DatabaseSync(path);
+    try {
+      old.exec('DROP INDEX seen_retention; ALTER TABLE seen DROP COLUMN at');
+      const checkpoint = JSON.parse(old.prepare("SELECT value FROM kv WHERE key='checkpoint'").get().value);
+      delete checkpoint.compactedAt;
+      old.prepare("UPDATE kv SET value=? WHERE key='checkpoint'").run(JSON.stringify(checkpoint));
+    } finally { old.close(); }
+    l = new TrafficLedger(path);
+    assert.equal(l.db.prepare('SELECT at FROM seen WHERE key=?').get(connectionIdentity(connection(100)).key).at, BASE + 1000);
+    feed(l, [connection(100, { id: 'changed' })], 100, 2000);
+    feed(l, [connection(120)], 120, 3000);
+    assert.equal(total(l).totalDown, 120);
+    assert.equal(l.snapshot().global.down, 120);
+    l.close(); l = new TrafficLedger(path);
+    feed(l, [connection(120)], 120, 4000);
+    assert.equal(total(l).totalDown, 120);
+  } finally { l?.close(); rmSync(dir, { recursive: true, force: true }); }
 });

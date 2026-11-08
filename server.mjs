@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TrafficLedger } from './traffic-ledger.mjs';
+import { TrafficLedger, controllerConnections } from './traffic-ledger.mjs';
 import { TrafficCollector } from './traffic-collector.mjs';
 
 const LOOPBACKS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -187,7 +187,8 @@ export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = 
           return;
         }
         const payload = await upstream.json();
-        if (!payload || !Array.isArray(payload.connections)) {
+        try { controllerConnections(payload); }
+        catch {
           sendJson(response, 502, { error: 'invalid_controller_response' });
           return;
         }

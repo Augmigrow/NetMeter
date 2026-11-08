@@ -89,9 +89,9 @@
 
 - 2026-11-06 修正「历史均速」悬停读数（用户指出原实现用峰值代替了均速）：原实现曲线本身画的确实是均速，但悬停提示是「每小时一个透明 `rect` + `<title>`」，标题里取的是该小时切片的 `Math.max`，于是提示显示成峰值。已改为：删掉按小时的 `<title>` 聚合读数，改为自绘悬停浮层——`.history-speed-surface` 透明 `rect` 接收指针事件，`line.history-speed-cursor` 竖直指示线跟随光标标出所在分钟，`.history-speed-tip` 浮层显示该分钟的下载/上传均速（与曲线点同值），i18n key 由 `history.peakTitle` 换成 `history.pointDown`/`history.pointUp`。规范 `UI_DESIGN_SPEC.md` 第「历史流量」节同步改写：历史曲线只报均速，不得用峰值代替，也不得按小时聚合成一个读数。回归：`scripts/history-curve-probe.cjs` 新增 4 项（悬停可见、读数等于该分钟均速、读数不等于该小时峰值、读数随位置变化），`scripts/i18n-probe.cjs` 相应把「峰值标题」断言换成「不得出现 peak」和「悬停读数是均速」两项；`scripts/screenshot-probe.cjs` 在拍「历史均速」截图前先派发一次 mousemove，让效果图里直接带出均速读数。
 
-- 2026-11-08 后台流量采集修复：新增 traffic-ledger.mjs（Node 24 node:sqlite + WAL）和 traffic-collector.mjs。Electron 主进程每秒采样，两个 BrowserWindow 均设置 backgroundThrottling: false；渲染器只读取 /api/collector/state 与历史接口。账本按稳定传输生命周期指纹去重，保留连接消失后的高水位，控制器全局累计独立记账，分钟按实际观测时间归桶，旧 IndexedDB/累计幂等迁移。
+- 2026-11-08 后台流量采集修复：新增 traffic-ledger.mjs（Node 24 node:sqlite + WAL）和 traffic-collector.mjs。Electron 主进程每秒采样，两个 BrowserWindow 均设置 backgroundThrottling: false；渲染器只读取 /api/collector/state 与历史接口。账本按稳定传输生命周期指纹去重，保留连接消失后的高水位，控制器全局累计独立记账，分钟按实际观测时间归桶，旧 IndexedDB/累计幂等迁移。2026-11-09 补齐 Mihomo 空闲响应：`connections:null` 仍按有效快照处理并更新全局累计；去重记录增加最后观测时间，保留七天、每小时回收，旧三列 seen 表自动迁移，清理后旧连接重现只建立新基线而不重放历史字节。
 - 2026-11-08 限制与口径：Mihomo /connections 是活动连接快照，关闭连接会从 map 删除；全局 downloadTotal/uploadTotal 能包含已结束连接但没有域名归属或完成事件。因此域名统计标为 active-snapshots-lower-bound，不伪造遗漏尾段；控制器重置/系统休眠/API 故障仍可能造成暂时漏记。
-- 2026-11-08 验证：npm test 115/115；scripts/background-collector-probe.cjs 五分钟隐藏实测 297 个样本、最大间隔 1037ms、平均 1008.54ms，global 10000/20000，域名 8840 并报告未观测 1160/2320；快速隐藏回归 7/7 并验证托盘 app.quit 的优雅关闭。scripts/history-timeline-probe.cjs 58/58；scripts/window-ready-probe.cjs 8/8；测试窗口均不可见且非置顶，无 NetMeter 测试进程/4196–4198 端口残留或常驻 watcher。
+- 2026-11-09 验证：npm test 122/122，新增覆盖空闲 null 快照、跨分钟累计、采集器持续 connected、七天去重回收、长连接保留、ID 重用、旧三列账本迁移和无效响应不推进检查点；scripts/background-collector-probe.cjs 五分钟隐藏实测 297 个样本、最大间隔 1018ms、平均 1008.375ms，global 10000/20000，域名 8946 并报告未观测 1054/2108；生产渲染器活动连接请求为 0，恢复显示未回放累计或制造峰值。scripts/history-timeline-probe.cjs 58/58；scripts/window-ready-probe.cjs 8/8；测试窗口均不可见且非置顶，无 NetMeter 测试进程/4196–4198 端口残留或常驻 watcher。
 - 2026-11-08 用户约束：不得新增关不掉的可见辅助窗、永久 watcher、开机自启或电源设置；测试必须有硬超时并自动退出。设置页重试路径在用户关闭后不会迟到弹回；黑屏原始根因未确定，但失败时显示白底可读双语错误页并记录脱敏诊断。
 
 ## 待办

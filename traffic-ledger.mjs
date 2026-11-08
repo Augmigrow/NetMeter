@@ -2,8 +2,16 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 
 export const GLOBAL_TARGET = '__netmeter_controller_total__';
+const SEEN_RETENTION_MS = 7 * 86400000;
+const SEEN_MAINTENANCE_MS = 3600000;
 const number = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const seconds = (value, bytes) => Number.isFinite(value) && value > 0 ? value : bytes ? null : 0;
+export function controllerConnections(payload) {
+  if (Array.isArray(payload?.connections)) return payload.connections;
+  // Mihomo serializes a nil slice as null when no connections are active.
+  if (payload?.connections === null && number(payload.downloadTotal) !== null && number(payload.uploadTotal) !== null) return [];
+  throw Error('invalid_controller_response');
+}
 export function connectionIdentity(c) {
   const m = c.metadata || {};
   // IDs can change or be reused. A start timestamp + transport endpoints identify a lifetime.
@@ -25,7 +33,7 @@ export class TrafficLedger {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;
       CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS seen(key TEXT PRIMARY KEY,down INTEGER,up INTEGER);
+      CREATE TABLE IF NOT EXISTS seen(key TEXT PRIMARY KEY,down INTEGER,up INTEGER,at INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS totals(target TEXT PRIMARY KEY,down INTEGER NOT NULL,up INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS minutes(target TEXT,at INTEGER,down INTEGER,up INTEGER,ds REAL,us REAL,PRIMARY KEY(target,at));
       CREATE TABLE IF NOT EXISTS legacy(id TEXT PRIMARY KEY,target TEXT,at INTEGER,down INTEGER,up INTEGER,ds REAL,us REAL);
@@ -33,6 +41,13 @@ export class TrafficLedger {
       CREATE INDEX IF NOT EXISTS legacy_time ON legacy(target,at);
       CREATE INDEX IF NOT EXISTS minutes_retention ON minutes(at);
       CREATE INDEX IF NOT EXISTS legacy_retention ON legacy(at);`);
+    if (!this.db.prepare('PRAGMA table_info(seen)').all().some(column => column.name === 'at')) {
+      this.transaction(() => {
+        this.db.exec('ALTER TABLE seen ADD COLUMN at INTEGER NOT NULL DEFAULT 0');
+        this.db.prepare('UPDATE seen SET at=?').run(this.get('checkpoint')?.at || 0);
+      });
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS seen_retention ON seen(at)');
     this.preferences = this.get('preferences') || { targets: [], history: '7天' };
     this.recent = new Map();
   }
@@ -77,10 +92,12 @@ export class TrafficLedger {
     return { at, down, up, elapsed: reliable ? elapsed : 0 };
   }
   ingest(payload, at, source) {
-    if (!Array.isArray(payload?.connections)) throw Error('invalid_controller_response');
+    const connections = controllerConnections(payload);
     const previous = this.get('checkpoint');
     if (previous?.source === source && at <= previous.at) return false;
     const same = previous?.source === source;
+    const epochAt = same ? Math.max(previous.epochAt, at - SEEN_RETENTION_MS) : at;
+    const compact = !same || at - (previous.compactedAt || 0) >= SEEN_MAINTENANCE_MS;
     const resetGlobal = same && number(payload.downloadTotal) !== null && number(payload.uploadTotal) !== null && previous.globalDown !== null && previous.globalUp !== null && (payload.downloadTotal < previous.globalDown || payload.uploadTotal < previous.globalUp);
     const elapsed = same ? (at - previous.at) / 1000 : 0;
     const reliable = elapsed > 0 && elapsed <= 2.5;
@@ -93,7 +110,8 @@ export class TrafficLedger {
     const pending = [];
     this.transaction(() => {
       if (!same) this.db.exec('DELETE FROM seen');
-      for (const c of payload.connections) {
+      else if (compact) this.db.prepare('DELETE FROM seen WHERE at<?').run(at - SEEN_RETENTION_MS);
+      for (const c of connections) {
         if (!c || typeof c !== 'object') continue;
         const identity = connectionIdentity(c);
         if (!identity.stable && !c.id) continue;
@@ -101,7 +119,8 @@ export class TrafficLedger {
         const down = number(c.download), up = number(c.upload);
         if (down === null || up === null) continue;
         const started = Date.parse(c.start);
-        const firstObserved = !prior && same && identity.stable && Number.isFinite(started) && started >= previous.epochAt;
+        // After compaction, an older lifetime is baselined rather than replayed in full.
+        const firstObserved = !prior && same && identity.stable && Number.isFinite(started) && started >= epochAt;
         // Counter regression with an unchanged lifetime is ambiguous: baseline, never re-add the full counter.
         const dd = prior ? Math.max(0, down - prior.down) : firstObserved ? down : 0;
         const du = prior ? Math.max(0, up - prior.up) : firstObserved ? up : 0;
@@ -120,7 +139,7 @@ export class TrafficLedger {
           if (counterReset || (firstObserved && started < previous.at)) delta.reliable = false;
         }
       }
-      for (const [key, value] of writes) this.db.prepare('INSERT OR REPLACE INTO seen VALUES(?,?,?)').run(key, value.down, value.up);
+      for (const [key, value] of writes) this.db.prepare('INSERT OR REPLACE INTO seen VALUES(?,?,?,?)').run(key, value.down, value.up, at);
       for (const [target, delta] of deltas) pending.push([target, this.add(target, at, delta.down, delta.up, elapsed, delta.reliable)]);
       let gd = 0, gu = 0;
       if (same && totalsAvailable && previous.globalDown !== null && previous.globalUp !== null) {
@@ -130,11 +149,11 @@ export class TrafficLedger {
         if (resetGlobal) resets++;
       }
       if (totalsAvailable) this.add(GLOBAL_TARGET, at, gd, gu, elapsed, reliable);
-      this.put('checkpoint', { source, at, epochAt: same ? previous.epochAt : at, globalDown: same ? globalDown === null ? previous.globalDown : Math.max(previous.globalDown ?? 0, globalDown) : globalDown,
+      this.put('checkpoint', { source, at, epochAt, compactedAt: compact ? at : previous.compactedAt, globalDown: same ? globalDown === null ? previous.globalDown : Math.max(previous.globalDown ?? 0, globalDown) : globalDown,
         globalUp: same ? globalUp === null ? previous.globalUp : Math.max(previous.globalUp ?? 0, globalUp) : globalUp, totalsAvailable,
         observedDown: (same ? previous.observedDown || 0 : 0) + observedDown, observedUp: (same ? previous.observedUp || 0 : 0) + observedUp,
         accountedDown: (same ? previous.accountedDown || 0 : 0) + gd, accountedUp: (same ? previous.accountedUp || 0 : 0) + gu, resets,
-        count: payload.connections.length, active: [...active] });
+        count: connections.length, active: [...active] });
       const cutoff = this.preferences.history === '长期' ? 0 : at - (this.preferences.history === '30天' ? 30 : 7) * 86400000;
       this.db.prepare('DELETE FROM minutes WHERE at<?').run(cutoff);
       this.db.prepare('DELETE FROM legacy WHERE at<?').run(cutoff);
