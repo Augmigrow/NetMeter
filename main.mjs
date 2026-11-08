@@ -9,6 +9,9 @@ import { APP_ID, shellIdentity } from './shell-identity.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 app.setName('NetMeter');
+const ownsInstance = app.requestSingleInstanceLock();
+if (!ownsInstance) app.quit();
+app.on('second-instance', () => { if (app.isReady()) { showWidget(); showSettings(); } });
 let server;
 let serverPort;
 let settingsWindow;
@@ -22,6 +25,8 @@ let historyOpen = false;
 let widgetWindowStateSaveTimer = null;
 let widgetWindowState = null;
 let uiLanguage = 'zh';
+let shutdownStarted = false;
+let shutdownFinished = false;
 
 const UI_STRINGS = {
   zh: {
@@ -131,7 +136,7 @@ function clampWidgetPosition(x, y, bounds) {
 function saveWidgetWindowState() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   const bounds = widgetWindow.getBounds();
-  writeFile(widgetWindowStatePath(), JSON.stringify({ x: bounds.x, y: bounds.y }), { mode: 0o600 }).catch(() => {});
+  return writeFile(widgetWindowStatePath(), JSON.stringify({ x: bounds.x, y: bounds.y }), { mode: 0o600 }).catch(() => {});
 }
 
 function scheduleWidgetWindowStateSave() {
@@ -201,7 +206,7 @@ async function persistControllerConfig(config) {
 }
 
 function startLocalServer(initialConfig) {
-  server = createNetMeterServer({ projectRoot: root, initialConfig, onConfigChanged: persistControllerConfig });
+  server = createNetMeterServer({ projectRoot: root, initialConfig, onConfigChanged: persistControllerConfig, trafficStorePath: join(app.getPath('userData'), 'traffic.sqlite') });
   const requestedPort = Number(process.env.PORT || 4174);
   return new Promise((resolvePort, reject) => {
     const tryPort = port => {
@@ -247,6 +252,29 @@ function placeSettingsBesideWidget() {
   settingsWindow.setPosition(position.x, position.y);
 }
 
+function recordWindowFailure(view, code) {
+  // No page URLs, configuration, website history or credentials in diagnostics.
+  appendFile(join(app.getPath('userData'), 'window-load-errors.jsonl'), JSON.stringify({ at: Date.now(), view, code }) + '\n').catch(() => {});
+}
+
+function loadSettingsPage(window) {
+  window.netmeterPageReady = false;
+  window.loadURL(pageUrl('settings')).catch(() => {
+    if (window.isDestroyed()) return;
+    recordWindowFailure('settings', 'load_failed');
+    window.netmeterLoadFailed = true;
+    const text = uiLanguage === 'en' ? 'Settings failed to load. Close and reopen this window to retry.' : '设置加载失败，请关闭此窗口后重新打开以重试。';
+    window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<!doctype html><html><meta charset="utf-8"><title>NetMeter</title><body style="font:14px Segoe UI,sans-serif;padding:24px;background:white;color:#183249"><h2>NetMeter</h2><p>' + text + '</p></body></html>')).catch(() => {});
+  });
+}
+
+function presentSettings(window) {
+  if (!window || window.isDestroyed() || !window.netmeterPageReady || !window.netmeterShowRequested) return;
+  window.setAlwaysOnTop(true, 'screen-saver');
+  window.show();
+  window.focus();
+}
+
 function showSettings() {
   if (!settingsWindow || settingsWindow.isDestroyed()) {
     settingsWindow = new BrowserWindow({
@@ -256,30 +284,47 @@ function showSettings() {
       minWidth: 440,
       minHeight: 600,
       title: strings().settingsTitle,
+      backgroundColor: '#ffffff',
       autoHideMenuBar: true,
       icon: appIconPath(),
       webPreferences: {
         preload: resolve(root, 'preload.cjs'),
+        backgroundThrottling: false,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true
       }
     });
     settingsWindow.setAppDetails(shellIdentity(process.execPath, root, appIconPath()).window);
+    settingsWindow.once('ready-to-show', () => {
+      if (settingsWindow && !settingsWindow.isDestroyed()) {
+        settingsWindow.netmeterPageReady = true;
+        presentSettings(settingsWindow);
+      }
+    });
+    settingsWindow.webContents.on('render-process-gone', (_event, details) => {
+      recordWindowFailure('settings', details.reason);
+      settingsWindow.netmeterLoadFailed = true;
+    });
     settingsWindow.on('close', event => {
       if (!quitting) {
         event.preventDefault();
+        settingsWindow.netmeterShowRequested = false;
         settingsWindow.hide();
         settingsWindow.setAlwaysOnTop(false);
       }
     });
-    settingsWindow.loadURL(pageUrl('settings'));
+    loadSettingsPage(settingsWindow);
   }
   settingsWindow.setTitle(strings().settingsTitle);
   placeSettingsBesideWidget();
-  settingsWindow.show();
-  settingsWindow.setAlwaysOnTop(true, 'screen-saver');
-  settingsWindow.focus();
+  settingsWindow.netmeterShowRequested = true;
+  if (settingsWindow.netmeterLoadFailed) {
+    settingsWindow.netmeterLoadFailed = false;
+    settingsWindow.webContents.once('did-finish-load', () => { if (settingsWindow && !settingsWindow.isDestroyed()) { settingsWindow.netmeterPageReady = true; presentSettings(settingsWindow); } });
+    loadSettingsPage(settingsWindow);
+  }
+  presentSettings(settingsWindow);
 }
 
 function showWidget() {
@@ -304,6 +349,7 @@ function showWidget() {
       icon: appIconPath(),
       webPreferences: {
         preload: resolve(root, 'preload.cjs'),
+        backgroundThrottling: false,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true
@@ -460,6 +506,7 @@ ipcMain.on('app:settings-saved', event => {
 });
 
 app.whenReady().then(async () => {
+  if (!ownsInstance) return;
   app.setAppUserModelId(APP_ID);
   await ensureAppIcon();
   await startLocalServer(await loadControllerConfig());
@@ -472,9 +519,28 @@ app.whenReady().then(async () => {
 });
 
 app.on('activate', showWidget);
-app.on('before-quit', () => {
-  quitting = true;
-  saveWidgetWindowState();
-  server?.close();
+
+async function finishShutdown() {
+  await saveWidgetWindowState();
+  server?.netmeterCollector?.stop();
+  const closed = server?.listening
+    ? new Promise(resolve => server.close(resolve))
+    : Promise.resolve();
+  await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 4000))]);
+  server?.netmeterLedger?.close();
   tray?.destroy();
+  shutdownFinished = true;
+  app.quit();
+}
+
+app.on('before-quit', event => {
+  if (shutdownFinished) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  quitting = true;
+  finishShutdown().catch(() => {
+    shutdownFinished = true;
+    app.quit();
+  });
 });

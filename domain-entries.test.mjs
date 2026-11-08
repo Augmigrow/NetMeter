@@ -70,7 +70,7 @@ test('widget persistence keeps hidden entries and older totals without storing t
   let stored = { domainEntries: [{ url: 'hidden', visible: false }], historyTotals: { hidden: { down: 50, up: 20 }, removed: { down: 7, up: 3 } } };
   const storage = { getItem: () => JSON.stringify(stored), setItem: (_, value) => { stored = JSON.parse(value); } };
   const persist = new Function('localStorage', 'metrics', 'readValues',
-    'const KEY = "test", view = "widget", meterOrder = [], meterPositions = {}; let saveTimer, lastPersistAt; ' +
+    'const KEY = "test", view = "widget", backgroundCollection = false, meterOrder = [], meterPositions = {}; let saveTimer, lastPersistAt; ' +
     'const document = {getElementById: () => ({textContent: ""})}; const t = key => key; const clearTimeout = () => {}; const setTimeout = () => 0;\n' +
     extractFunction('persist') + '\nreturn persist;')(storage, new Map([['shown', { totalDown: 100, totalUp: 10 }]]), () => ({}));
   persist();
@@ -79,4 +79,15 @@ test('widget persistence keeps hidden entries and older totals without storing t
   assert.deepEqual(stored.historyTotals.removed, { down: 7, up: 3 });
   assert.deepEqual(stored.historyTotals.shown, { down: 100, up: 10 });
   assert.equal('controllerSecret' in stored, false);
+});
+
+
+test('backend mode preserves legacy totals without serializing live counters into them', () => {
+  let stored={historyTotals:{shown:{down:50,up:20}}};
+  const storage={getItem:()=>JSON.stringify(stored),setItem:(_,value)=>{stored=JSON.parse(value);}};
+  const persist=new Function('localStorage','metrics','readValues',
+    'const KEY="test",view="widget",backgroundCollection=true,meterOrder=[],meterPositions={};let saveTimer,lastPersistAt;'+
+    'const document={getElementById:()=>({textContent:""})};const t=key=>key;const clearTimeout=()=>{};const setTimeout=()=>0;'+
+    extractFunction('persist')+';return persist;')(storage,new Map([['shown',{totalDown:1000,totalUp:2000}]]),()=>({}));
+  persist();assert.deepEqual(stored.historyTotals.shown,{down:50,up:20});
 });

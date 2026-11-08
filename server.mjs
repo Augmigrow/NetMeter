@@ -3,8 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TrafficLedger } from './traffic-ledger.mjs';
+import { TrafficCollector } from './traffic-collector.mjs';
+
 const LOOPBACKS = new Set(['localhost', '127.0.0.1', '::1']);
-const MAX_BODY_BYTES = 8192;
+const MAX_BODY_BYTES = 65536;
 
 function sendJson(response, status, payload) {
   response.writeHead(status, {
@@ -68,9 +71,12 @@ async function readJson(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = fetch, initialConfig = null, onConfigChanged = null } = {}) {
+export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = fetch, initialConfig = null, onConfigChanged = null, trafficStorePath = ':memory:', backgroundCollection = true } = {}) {
   let config = restoredControllerConfig(initialConfig);
   const root = resolve(projectRoot);
+  const ledger = new TrafficLedger(trafficStorePath);
+  const collector = new TrafficCollector({ ledger, fetchImpl });
+  collector.configure(storableControllerConfig(config));
   const persistConfig = async nextConfig => {
     if (typeof onConfigChanged !== 'function') return true;
     try {
@@ -81,7 +87,7 @@ export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = 
     }
   };
 
-  return createHttpServer(async (request, response) => {
+  const server = createHttpServer(async (request, response) => {
     if (!localRequestAllowed(request)) {
       sendJson(response, 403, { error: 'local_requests_only' });
       return;
@@ -106,7 +112,7 @@ export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = 
     }
 
     if (request.method === 'GET' && pathname === '/api/status') {
-      sendJson(response, 200, { enabled: Boolean(config?.enabled), configured: Boolean(config?.secret), address: config?.address?.host || '' });
+      sendJson(response, 200, { enabled: Boolean(config?.enabled), configured: Boolean(config?.secret), address: config?.address?.host || '', collector: backgroundCollection });
       return;
     }
 
@@ -122,6 +128,7 @@ export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = 
         const secret = body.secret.trim() ? body.secret : savedSecret;
         if (!body.enabled) {
           config = secret && address ? { enabled: false, address, secret } : null;
+          collector.configure(storableControllerConfig(config));
           const persisted = await persistConfig(config);
           sendJson(response, 200, { ok: true, enabled: false, configured: Boolean(config?.secret), address: address?.host || '', persisted });
           return;
@@ -131,12 +138,33 @@ export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = 
           return;
         }
         config = { enabled: true, address, secret };
+        collector.configure(storableControllerConfig(config));
         const persisted = await persistConfig(config);
         sendJson(response, 200, { ok: true, enabled: true, configured: true, address: address.host, persisted });
       } catch (error) {
         sendJson(response, 400, { error: error.message === 'body_too_large' ? 'body_too_large' : 'invalid_config' });
       }
       return;
+    }
+
+    if (request.method === 'GET' && pathname === '/api/collector/state') {
+      sendJson(response, 200, collector.snapshot()); return;
+    }
+    if (request.method === 'POST' && pathname === '/api/collector/settings') {
+      try { ledger.setPreferences(await readJson(request)); sendJson(response, 200, { ok: true }); }
+      catch { sendJson(response, 400, { error: 'invalid_preferences' }); }
+      return;
+    }
+    if (request.method === 'POST' && pathname === '/api/collector/import') {
+      try { ledger.importLegacy((await readJson(request)).samples); sendJson(response, 200, { ok: true }); }
+      catch { sendJson(response, 400, { error: 'invalid_import' }); }
+      return;
+    }
+    if (request.method === 'GET' && pathname === '/api/collector/history') {
+      const query = new URL(request.url, 'http://localhost').searchParams;
+      const target = query.get('target'), since = Number(query.get('since')), until = Number(query.get('until') || Date.now());
+      if (!target || target.length > 512 || !Number.isFinite(since) || !Number.isFinite(until)) { sendJson(response, 400, { error: 'invalid_query' }); return; }
+      sendJson(response, 200, ledger.history(target, since, until)); return;
     }
 
     if (request.method === 'GET' && pathname === '/api/connections') {
@@ -172,6 +200,13 @@ export function createNetMeterServer({ projectRoot = process.cwd(), fetchImpl = 
 
     sendJson(response, 404, { error: 'not_found' });
   });
+  const closeServer = server.close.bind(server);
+  server.close = (...args) => { collector.stop(); return closeServer(...args); };
+  server.netmeterCollector = collector;
+  server.netmeterLedger = ledger;
+  server.once('listening', () => { if (backgroundCollection) collector.start(); });
+  server.once('close', () => { collector.stop(); ledger.close(); });
+  return server;
 }
 
 const currentFile = fileURLToPath(import.meta.url);

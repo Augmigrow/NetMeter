@@ -37,7 +37,7 @@ test('local proxy keeps the secret in memory and forwards authenticated controll
     response.end();
   });
   const upstreamPort = await listen(upstream);
-  const app = createNetMeterServer({ projectRoot: process.cwd(), onConfigChanged: config => savedConfigs.push(config) });
+  const app = createNetMeterServer({ backgroundCollection: false, projectRoot: process.cwd(), onConfigChanged: config => savedConfigs.push(config) });
   const appPort = await listen(app);
   const base = 'http://127.0.0.1:' + appPort;
   const secret = 'synthetic-test-secret';
@@ -67,7 +67,7 @@ test('local proxy keeps the secret in memory and forwards authenticated controll
 });
 
 test('controller addresses are restricted to loopback and secrets are required', async () => {
-  const app = createNetMeterServer({ projectRoot: process.cwd() });
+  const app = createNetMeterServer({ backgroundCollection: false, projectRoot: process.cwd() });
   const port = await listen(app);
   const base = 'http://127.0.0.1:' + port;
 
@@ -81,7 +81,7 @@ test('controller addresses are restricted to loopback and secrets are required',
 test('a saved disabled controller can be re-enabled without submitting the secret again', async () => {
   const secret = 'synthetic-persisted-secret';
   let authorization;
-  const app = createNetMeterServer({
+  const app = createNetMeterServer({ backgroundCollection: false,
     projectRoot: process.cwd(),
     initialConfig: { enabled: false, address: '127.0.0.1:9097', secret },
     fetchImpl: async (_url, options) => {
@@ -104,3 +104,19 @@ test('a saved disabled controller can be re-enabled without submitting the secre
   assert.equal(authorization, 'Bearer ' + secret);
 });
 
+
+test('collector APIs are private to loopback, contain no secret, and import history/totals idempotently', async () => {
+  const app = createNetMeterServer({ backgroundCollection: false });
+  const port = await listen(app), base = 'http://127.0.0.1:' + port;
+  const prefs = { targets: ['example.com'], history: '30天', legacyTotals: { 'example.com': { down: 100, up: 200 } } };
+  for (let i = 0; i < 2; i++) assert.equal((await postJson(base + '/api/collector/settings', prefs)).status, 200);
+  const sample = { target: 'example.com', at: 1794139200000, down: 100, up: 200, downSeconds: 2, upSeconds: 4 };
+  for (let i = 0; i < 2; i++) assert.equal((await postJson(base + '/api/collector/import', { samples: [sample] })).status, 200);
+  const history = await (await fetch(base + '/api/collector/history?target=example.com&since=0&until=9999999999999')).json();
+  assert.equal(history.length, 1); assert.equal(history[0].up, 200);
+  const state = await (await fetch(base + '/api/collector/state')).json();
+  assert.equal(state.metrics[0].totalUp, 200);
+  assert.equal(JSON.stringify(state).includes('secret'), false);
+  assert.equal((await fetch(base + '/api/collector/state', { headers: { Origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await postJson(base + '/api/collector/settings', { targets: 'not-array' })).status, 400);
+});

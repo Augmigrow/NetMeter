@@ -10,13 +10,14 @@
 ## 当前实现
 
 - `UI_DESIGN_SPEC.md` 是当前 UI 的权威基线，固定方格尺寸、字号、箭头、颜色、网格线、8px 分轴对齐、历史页、设置页和交互边界；项目级 `AGENTS.md` 要求后续 UI 改动先遵循该规范。
-- `server.mjs` 只监听回环地址，可接收启动时恢复的控制器配置，并代理 `/connections` 请求；禁用状态保留密钥，只停止采集。
-- `index.html` 同时支持设置视图和 `?view=widget` 悬浮视图；浏览器设置和历史仍与密钥分离，历史按分钟写入 IndexedDB。
+- `server.mjs` 只监听回环地址，可接收启动时恢复的控制器配置，并代理兼容的 `/connections` 请求。新的后台采集由主进程内的 `TrafficCollector` 每秒读取控制器，`TrafficLedger` 用 SQLite/WAL 保存分钟、累计和去重高水位；服务关闭时同步停止定时器与数据库，禁用控制器只停止采集并保留密钥。
+- `index.html` 同时支持设置视图和 `?view=widget` 悬浮视图；设置与密钥分离。正式 Electron 模式的方格只读取 `/api/collector/state` 和 `/api/collector/history`，旧 IndexedDB 仅用于一次性幂等迁移；只有缺少 collector 的独立预览环境保留旧的渲染器采样兼容路径。
 - `main.mjs` 使用 Electron 异步 `safeStorage` 将控制器地址、启用状态和密钥加密到当前用户的应用数据目录；密钥不进入 `localStorage`、项目文件或日志。`preload.cjs`、`package.json` 继续提供 Electron 置顶小窗、托盘显隐和设置窗口；方格不再使用 `-webkit-app-region: drag` 标题栏，普通左键整窗拖动走即时的 `widget:move-fast` IPC，`widget:move` 只用于需要返回实际位移的操作。
-- 网址条目存为 `domainEntries: [{ url, visible }]`，兼容保留 `domains` 数组；旧字符串数组由 `normalizeDomainEntries` 迁移为全选。保存/取消沿用设置流程，空白与重复值禁止保存。`targetNames` 只返回勾选项，`trackedTargetNames` 返回全部条目供轮询；隐藏仍采集，历史与累计保留，全部不选显示空状态。新增默认勾选；删除不清历史，编辑到不同网址使用新统计目标。域名匹配包含子域名。
+- 网址条目存为 `domainEntries: [{ url, visible }]`，兼容保留 `domains` 数组；旧字符串数组由 `normalizeDomainEntries` 迁移为全选。保存/取消沿用设置流程，空白与重复值禁止保存。`targetNames` 只返回勾选项，`trackedTargetNames` 返回全部条目供后台采集配置；隐藏仍采集，历史与累计保留，全部不选显示空状态。新增默认勾选；删除不清历史，编辑到不同网址使用新统计目标。域名匹配包含子域名。
 - 紧凑卡片约 180×148；主速度 17px，标签 12px，统计行 13px；方向箭头用 SVG 细描边，统计行箭头略小于实时行。每秒轮询仅更新现有节点，避免替换按钮导致点击/焦点丢失。
 - 峰值与均速共用设置页选定的同一时间窗口：峰值是窗口内该方向有流量的最高单次采样速度，样本滑出窗口后自动回落，不再保留会话级峰值；均速和峰值可在各方格独立切换，切换仅在当前渲染会话保持。
-- 实现：`pollConnections` 每秒为每个域名记录一条 `{ at, down, up, elapsed }` 样本到 `metric.rateSamples`，只保留最长 10 分钟；`windowRates(samples, cutoff)` 在渲染时一次遍历按当前窗口裁剪，分别累加该方向有流量样本的字节与 `elapsed` 得到均速，同时取 `sample.down / sample.elapsed` 的最大值得到峰值；无活跃样本返回 `null`，由 `formatRate` 显示为「—」。`currentRates` 每次渲染用 `Date.now()` 重算，因此窗口过期、切换窗口、断连都会实时反映。旧的 `sessionDown/sessionUp/activeSeconds`、`metric.peakDown/peakUp` 累计和 `metric.samples` 已移除。样本只存内存，不落盘；窗口设置 `avgWindow` 存在 `localStorage` 的 `netmeter-controller-v2`，设置页保存后主进程重载悬浮窗使其生效。
+- 实现：主进程 collector 每秒生成每个域名的 `{ at, down, up, elapsed }` 样本，保留最近 10 分钟并通过 `/api/collector/state` 提供给 renderer；`windowRates(samples, cutoff)` 在渲染时按当前窗口裁剪，分别累加该方向有流量样本的字节与 `elapsed` 得到均速，同时取 `sample.down / sample.elapsed` 的最大值得到峰值；无活跃样本返回 `null`，由 `formatRate` 显示为「—」。`currentRates` 每次渲染用 `Date.now()` 重算，因此窗口过期、切换窗口、断连都会实时反映。`avgWindow` 仍存在 `localStorage` 的 `netmeter-controller-v2`，设置页保存后主进程重载悬浮窗使其生效。
+- 2026-11-08 后台采集修复：主进程窗口设置 `backgroundThrottling: false`，隐藏、最小化或遮挡时仍以约 1 秒间隔采样；连接身份按开始时间与传输端点生成稳定指纹，不依赖可变的连接 ID 或嗅探域名。新连接首次观察到时计入已有字节；连接消失后保留高水位以避免尾随快照和 ID 重用重复计数。控制器 `downloadTotal/uploadTotal` 独立累计用于校验全局流量，分钟按响应实际观测时间归桶。失败请求不清空基线，不并发重试，停止后不重新调度。
 - 设置页在「历史流量保留」之后新增「均速统计窗口」下拉（2/5/10 分钟，默认 5 分钟），并带一行 11px 口径说明；`readValues`、`restore`、`persist`、`copySummary` 均同步该值。悬浮窗另监听 `storage` 事件，其他窗口改设置时只更新均速窗口并立即重算，不重置拖动或方格坐标；Electron 里主进程保存设置后仍会重载悬浮窗。历史摘要的「下载均速/上传均速」复用同一个窗口化均速，四列标题保持不变。
 - 悬浮模式下方格整面（标题栏、速度区、统计区）都接受鼠标左键拖动。普通左键拖动移动整块悬浮窗，所有方格一起走、相对排布不变；只有按住 `Ctrl` 拖动时才移动指针所在的那一个方格，其余方格不动。位移小于 4px 仍算点击，因此域名、设置齿轮和均速/峰值按钮的点击不受影响。
 - 单个方格的拖动没有人为限位：落点使用窗口内 `clientX/clientY` 相对方格容器计算，方格始终跟随指针；向右或向下拖动时工作区与悬浮窗按需增长，向左或向上拖出画布时渲染进程用 `window.moveTo` 同任务平移窗口并反向补偿其余方格。其他方格的 X 或 Y 坐标只用于显示对齐参考线，不得把当前方格拉走、拉回或卡住。松手后落点就是指针位置，独立拖动不吸附、不联动；收紧窗口时仍按实际位移补偿其余方格。拖动开始时从主进程 `widget:position` 校准窗口位置；松手后按所有方格的实际外接边界收紧窗口，并把像素位置写入本地布局。
@@ -30,9 +31,9 @@
 - 2026-11-08 用户确认“默认初始显示对应全跨度”：`historySpanWidth` 在没有有效缩放偏好时直接返回可视宽度，两种图表、全部 1/6/24 小时及 7/30 天范围统一适配完整时间边界（含空白），删除旧 `historyTimelineWidth` 和固定密度 fallback；只改变初始 X 轴尺度，当前总范围未切换时已有手动缩放仍按图表独立恢复。
 - 2026-11-08 用户要求“只保留当前所选跨度的可视范围记忆”：`setHistoryRange` 对实际范围变更清空两图缩放/滚动位置并覆盖当前记录，选择相同范围不清空；存储读取必须匹配当前 `range` 标签，无标签旧格式和不匹配记录丢弃，启动立即正规化。只保存一份当前范围记录，不为旧范围建立缓存；同一总范围关闭重开/重启仍可记忆，不跨范围继承或恢复。
 - 历史标签采用“记住上次选择”，不新增设置页默认视图：首次使用是“历史流量”，切换时把 `traffic` 或 `speed` 存到独立的 `netmeter-history-tab` 本地键；关闭重开、换域名和应用重启后恢复。存储不可用时当前渲染会话仍保留选择；无效存储值回退“历史流量”。
-- 「历史均速」曲线口径与方格均速一致：从用户选择的范围按分钟计算，保留真实首尾与空闲区段，纵轴是当前统计窗口（2/5/10 分钟）内的字节 ÷ 该方向有流量秒数，下载上传各自独立。IndexedDB 分钟样本的 `downSeconds`/`upSeconds` 保存各方向活跃秒。2026-11-06 纠错：旧记录有字节而缺少活跃秒时，原读取和同分钟更新都擅自按 60 秒兜底，短时高速流量会被显著压低；现 `historyActiveSeconds` 返回 `null` 表示未知，`historySpeedSeries` 按方向阻断受污染窗口的曲线，写入侧合并新样本时继续保留该方向的未知状态。全缺秒时双语说明，部分缺秒时图表标注；历史流量柱状图保留字节。先前已被旧代码补写成 60 秒的记录无法与真正持续 60 秒的样本可靠区分，不能自动恢复真实均速。
+- 「历史均速」曲线口径与方格均速一致：从用户选择的范围按分钟计算，保留真实首尾与空闲区段，纵轴是当前统计窗口（2/5/10 分钟）内的字节 ÷ 该方向有流量秒数，下载上传各自独立。后台 SQLite 分钟样本的 `downSeconds`/`upSeconds` 保存各方向活跃秒；旧 IndexedDB 数据按 target+minute 幂等迁移。2026-11-06 纠错：旧记录有字节而缺少活跃秒时，原读取和同分钟更新都擅自按 60 秒兜底，短时高速流量会被显著压低；现 `historyActiveSeconds` 返回 `null` 表示未知，`historySpeedSeries` 按方向阻断受污染窗口的曲线，写入侧合并新样本时继续保留该方向的未知状态。全缺秒时双语说明，部分缺秒时图表标注；历史流量柱状图保留字节。先前已被旧代码补写成 60 秒的记录无法与真正持续 60 秒的样本可靠区分，不能自动恢复真实均速。
 - 2026-11-07 新要求取代早期“有效数据直接满宽”：已移除 `historySpeedViewport` 首尾裁剪，`historySpeedSeries` 新增可选范围参数，历史加载保留统计窗口预热分钟。`historySpeedX` 使用同一完整时间映射，归一化 X 坐标保留 5 位小数，避免 30 天长轴出现像素量化。SVG 路径仍 1.4px 不缩放描边，下载/上传共用纵轴，无活跃流量按方向断线；滚动后的悬停仍读该分钟窗口均速，不用峰值替代。提示与旧数据缺秒标注固定在可视窗口内，不随时间轴滚走。
-- 标签栏用 `role="tablist"`/`role="tab"` + `aria-selected` + roving tabindex，左右方向键在两个标签间切换；切换标签会重新读一次 IndexedDB，让曲线反映面板打开期间新增的样本。
+- 标签栏用 `role="tablist"`/`role="tab"` + `aria-selected` + roving tabindex，左右方向键在两个标签间切换；切换标签会重新读一次后台历史接口，让曲线反映面板打开期间新增的样本。
 - 设置页的监听地址和 API 密钥右侧为显示/隐藏按钮。设置窗和悬浮方格是同时显示、可独立操作的两个窗口；若两者重叠，设置窗会自动移动到方格旁边，不再隐藏方格；悬浮窗在画布尺寸变化后会重新避让，避免方格被设置窗盖住。
 - 设置页在已保存密钥时显示“已安全保存，留空继续使用”。留空保存会复用同地址密钥；禁用控制器不会删除密钥，更换监听地址时需重新输入。
 - 界面支持中文和英文双语，入口是设置页的「界面语言」下拉框。`index.html` 顶部的 `I18N` 字典同时保存 zh 和 en 两套文案，键集合必须完全一致；静态文案用 `data-i18n` / `data-i18n-aria` / `data-i18n-title` / `data-i18n-placeholder` 标记，`applyStaticTranslations()` 统一套用；动态文案（方格标签、历史摘要、图表提示、连接状态、提示条、需求摘要）一律走 `t('key', vars)`。
@@ -87,6 +88,11 @@
 - 2026-11-06 拖动复核：`scripts/drag-probe.cjs` 15 项场景全部通过（其余方格 `othersMoved=false`、逐帧 `swings=0`、`jitter=false`；普通拖动三格同位移 +100/+80；先按鼠标再按 Ctrl 时首段位移为 0、切换后仅被拖方格移动 60px；副屏 `\\.\DISPLAY1` 下逐帧零位移）。
 
 - 2026-11-06 修正「历史均速」悬停读数（用户指出原实现用峰值代替了均速）：原实现曲线本身画的确实是均速，但悬停提示是「每小时一个透明 `rect` + `<title>`」，标题里取的是该小时切片的 `Math.max`，于是提示显示成峰值。已改为：删掉按小时的 `<title>` 聚合读数，改为自绘悬停浮层——`.history-speed-surface` 透明 `rect` 接收指针事件，`line.history-speed-cursor` 竖直指示线跟随光标标出所在分钟，`.history-speed-tip` 浮层显示该分钟的下载/上传均速（与曲线点同值），i18n key 由 `history.peakTitle` 换成 `history.pointDown`/`history.pointUp`。规范 `UI_DESIGN_SPEC.md` 第「历史流量」节同步改写：历史曲线只报均速，不得用峰值代替，也不得按小时聚合成一个读数。回归：`scripts/history-curve-probe.cjs` 新增 4 项（悬停可见、读数等于该分钟均速、读数不等于该小时峰值、读数随位置变化），`scripts/i18n-probe.cjs` 相应把「峰值标题」断言换成「不得出现 peak」和「悬停读数是均速」两项；`scripts/screenshot-probe.cjs` 在拍「历史均速」截图前先派发一次 mousemove，让效果图里直接带出均速读数。
+
+- 2026-11-08 后台流量采集修复：新增 traffic-ledger.mjs（Node 24 node:sqlite + WAL）和 traffic-collector.mjs。Electron 主进程每秒采样，两个 BrowserWindow 均设置 backgroundThrottling: false；渲染器只读取 /api/collector/state 与历史接口。账本按稳定传输生命周期指纹去重，保留连接消失后的高水位，控制器全局累计独立记账，分钟按实际观测时间归桶，旧 IndexedDB/累计幂等迁移。
+- 2026-11-08 限制与口径：Mihomo /connections 是活动连接快照，关闭连接会从 map 删除；全局 downloadTotal/uploadTotal 能包含已结束连接但没有域名归属或完成事件。因此域名统计标为 active-snapshots-lower-bound，不伪造遗漏尾段；控制器重置/系统休眠/API 故障仍可能造成暂时漏记。
+- 2026-11-08 验证：npm test 115/115；scripts/background-collector-probe.cjs 五分钟隐藏实测 297 个样本、最大间隔 1037ms、平均 1008.54ms，global 10000/20000，域名 8840 并报告未观测 1160/2320；快速隐藏回归 7/7 并验证托盘 app.quit 的优雅关闭。scripts/history-timeline-probe.cjs 58/58；scripts/window-ready-probe.cjs 8/8；测试窗口均不可见且非置顶，无 NetMeter 测试进程/4196–4198 端口残留或常驻 watcher。
+- 2026-11-08 用户约束：不得新增关不掉的可见辅助窗、永久 watcher、开机自启或电源设置；测试必须有硬超时并自动退出。设置页重试路径在用户关闭后不会迟到弹回；黑屏原始根因未确定，但失败时显示白底可读双语错误页并记录脱敏诊断。
 
 ## 待办
 

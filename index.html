@@ -268,6 +268,8 @@
           'stage.label': '悬浮方格外观预览',
           'status.offline': '未连接',
           'status.connected': '已连接 · {count} 个活动连接',
+          'status.connectedLimited': '已连接 · {count} 个活动连接 · 域名统计为观测下界',
+          'meter.observedTotal': '域名累计仅含观测到的连接字节；短连接及关闭尾段可能缺失。控制器全局累计在后台独立校验，不冒充分配到域名。',
           'status.connectFailed': '连接失败 · {message}',
           'status.dirty': '设置已修改，请保存',
           'status.disabled': '已停用',
@@ -297,10 +299,11 @@
           'history.summaryUpTotal': '上传累计',
           'history.summaryDownAverage': '下载均速',
           'history.summaryUpAverage': '上传均速',
+          'history.loadFailed': '历史读取失败，请重新打开',
           'history.emptyTraffic': '尚未记录到历史流量',
           'history.emptySpeed': '尚无历史均速记录',
-          'history.legacySpeed': '旧记录缺少活跃秒，均速无法还原',
-          'history.legacySpeedNote': '旧数据区段无法计算均速',
+          'history.legacySpeed': '部分记录缺少可靠活跃秒，均速无法还原',
+          'history.legacySpeedNote': '缺少可靠活跃秒的区段均速未知',
           'history.barTitle': '下载 {down} · 上传 {up}',
           'history.curveLabel': '历史均速曲线',
           'history.pointDown': '下载均速 {value}',
@@ -390,6 +393,8 @@
           'stage.label': 'Floating tile preview',
           'status.offline': 'Not connected',
           'status.connected': 'Connected · {count} active connections',
+          'status.connectedLimited': 'Connected · {count} active connections · Domain totals are observed lower bounds',
+          'meter.observedTotal': 'Domain totals include observed connection bytes only; short connections and closing tails may be missing. Controller-wide totals are tracked separately, never guessed per domain.',
           'status.connectFailed': 'Connection failed · {message}',
           'status.dirty': 'Settings changed, please save',
           'status.disabled': 'Disabled',
@@ -419,10 +424,11 @@
           'history.summaryUpTotal': 'Up total',
           'history.summaryDownAverage': 'Down average',
           'history.summaryUpAverage': 'Up average',
+          'history.loadFailed': 'History unavailable; reopen to retry',
           'history.emptyTraffic': 'No traffic history recorded yet',
           'history.emptySpeed': 'No average speed history yet',
-          'history.legacySpeed': 'Older records lack active seconds; average unavailable',
-          'history.legacySpeedNote': 'Older segments lack average data',
+          'history.legacySpeed': 'Some records lack reliable active seconds; average unavailable',
+          'history.legacySpeedNote': 'Averages unavailable where active seconds are unknown',
           'history.barTitle': 'Down {down} · Up {up}',
           'history.curveLabel': 'Historical average speed curve',
           'history.pointDown': 'Down avg {value}',
@@ -610,6 +616,7 @@
       let saveTimer;
       let pollTimer;
       let pollBusy = false;
+      let backgroundCollection = false;
       let lastSampleAt = 0;
       let counters = new Map();
       let metrics = new Map();
@@ -894,7 +901,7 @@
           const values = readValues();
           const stored = JSON.parse(localStorage.getItem(KEY) || '{}');
           const totals = { ...(stored.historyTotals || {}) };
-          if (view === 'widget') metrics.forEach((metric, name) => { totals[name] = { down: metric.totalDown, up: metric.totalUp }; });
+          if (view === 'widget' && !backgroundCollection) metrics.forEach((metric, name) => { totals[name] = { down: metric.totalDown, up: metric.totalUp }; });
           const next = view === 'widget' ? { ...stored, historyTotals: totals, layoutOrder: [...meterOrder], meterPositions } : {
             controllerEnabled: values.controllerEnabled,
             controllerAddress: values.controllerAddress,
@@ -1615,6 +1622,11 @@
       }
 
       function loadHistory(name) {
+        if (backgroundCollection) {
+          const since = Math.max(retentionStart(), Date.now() - HISTORY_RANGES[historyRange] * 60000 - averageWindowMs() - 60000);
+          return fetch('/api/collector/history?' + new URLSearchParams({ target: name, since: String(since), until: String(Date.now()) }), { cache: 'no-store' })
+            .then(response => { if (!response.ok) throw Error('history_unavailable'); return response.json(); });
+        }
         if (!historyDb) return Promise.resolve([]);
         return new Promise(resolve => {
           const since = Math.max(retentionStart(), Date.now() - HISTORY_RANGES[historyRange] * 60000 - averageWindowMs() - 60000);
@@ -2022,13 +2034,57 @@
           if (version !== historyLoadVersion || historyPanel.hidden || historyTarget !== target) return;
           historySamples = samples;
           renderHistoryTab();
+        }).catch(() => {
+          if (version !== historyLoadVersion || historyPanel.hidden || historyTarget !== target) return;
+          const chart = historyTab === 'speed' ? historySpeedChart : historyChart;
+          chart.replaceChildren(); const message = document.createElement('span');
+          message.className = 'history-empty'; message.textContent = t('history.loadFailed'); chart.append(message);
         });
+      }
+
+      async function syncCollectionSettings() {
+        const status = await (await fetch('/api/status', { cache: 'no-store' })).json();
+        backgroundCollection = status.collector === true;
+        if (!backgroundCollection) return;
+        const response = await fetch('/api/collector/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targets: trackedTargetNames(), history: fields.history.value, legacyTotals: savedTotals }) });
+        if (!response.ok) throw Error('collector_settings_failed');
+      }
+
+      async function importLocalHistory() {
+        if (!backgroundCollection || !historyDb) return;
+        const samples = await new Promise(resolve => {
+          const request = historyDb.transaction('samples').objectStore('samples').getAll();
+          request.onsuccess = () => resolve(request.result || []); request.onerror = () => resolve([]);
+        });
+        for (let offset = 0; offset < samples.length; offset += 25) {
+          const response = await fetch('/api/collector/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ samples: samples.slice(offset, offset + 25) }) });
+          if (!response.ok) throw Error('history_import_failed');
+        }
+      }
+
+      async function displayCollectedTraffic() {
+        const response = await fetch('/api/collector/state', { cache: 'no-store' });
+        if (!response.ok) throw Error('collector_unavailable');
+        const state = await response.json();
+        for (const item of state.metrics || []) {
+          const metric = getMetric(item.target), mode = metric.rateMode;
+          Object.assign(metric, item, { rateMode: mode });
+          if (!state.enabled) Object.assign(metric, { connected: false, downRate: 0, upRate: 0 });
+        }
+        renderMeters();
+        document.querySelectorAll('.total-down, .total-up').forEach(node => { node.title = t('meter.observedTotal'); });
+        if (!state.enabled) setConnectionState('disabled', 'status.disabled');
+        else if (state.status === 'connected') setConnectionState('connected', 'status.connectedLimited', { count: state.count });
+        else setConnectionState(state.status === 'error' ? 'error' : 'idle', state.status === 'error' ? 'status.connectFailed' : 'status.connecting', { message: 'controller_unreachable' });
       }
 
       async function pollConnections() {
         if (pollBusy || !fields.enabled.checked) return;
         pollBusy = true;
         try {
+          if (backgroundCollection) { await displayCollectedTraffic(); return; }
+          // Compatibility for standalone preview fixtures without a collector service.
           const response = await fetch('/api/connections', { cache: 'no-store' });
           if (!response.ok) throw new Error('HTTP ' + response.status);
           const payload = await response.json();
@@ -2090,7 +2146,13 @@
         counters = new Map();
         lastSampleAt = 0;
         if (settingsDirty) { setConnectionState('idle', 'status.dirty'); renderMeters(); return false; }
+        try { await syncCollectionSettings(); await importLocalHistory(); }
+        catch { setConnectionState('error', 'status.configFailed', { message: 'collector_initialization_failed' }); return false; }
         const configured = await configureBackend();
+        if (backgroundCollection) {
+          try { await displayCollectedTraffic(); }
+          catch { setConnectionState('error', 'status.configFailed', { message: 'collector_unavailable' }); return false; }
+        }
         if (!fields.enabled.checked) { setConnectionState('disabled', 'status.disabled'); renderMeters(); return false; }
         if (!configured) { setConnectionState('idle', fields.secret.value.trim() ? 'status.restoreFailed' : 'status.needSecret'); renderMeters(); return false; }
         setConnectionState('idle', 'status.connecting');
@@ -2158,7 +2220,7 @@
         persist();
         pruneHistory();
         const configured = await configureBackend();
-        if (configured) fields.secret.value = '';
+        if (configured) { fields.secret.value = ''; await syncCollectionSettings(); }
         await refreshSecretStorageState();
         window.netmeterDesktop?.settingsSaved();
         notify(configured ? t('toast.savedKey') : t('toast.savedNoKey'));
@@ -2180,6 +2242,11 @@
       document.getElementById('copySummary').addEventListener('click', copySummary);
       document.getElementById('closeDialog').addEventListener('click', closeHistory);
       historyRangeSelect.addEventListener('change', () => setHistoryRange(historyRangeSelect.value));
+      // Electron changes native size asynchronously when history opens/closes. Reflow
+      // the remembered duration after the real viewport arrives, including hidden windows.
+      window.addEventListener('resize', () => {
+        if (!historyPanel.hidden && historyTarget) renderHistoryTab();
+      });
       historyScroll.addEventListener('scroll', updateHistoryViewport);
       historyScroll.addEventListener('wheel', event => {
         if (event.ctrlKey) { zoomHistoryViewport(event); return; }

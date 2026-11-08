@@ -2,9 +2,9 @@
 
 [中文](#中文) · [English](#english)
 
-NetMeter 是一个 Windows 本机代理流量悬浮方格，界面支持中文和英文双语。它读取代理控制器当前活动连接的累计字节数，按目标域名展示下载、上传速度和本机累计流量，不会主动发起测速。
+NetMeter 是一个 Windows 本机代理流量悬浮方格，界面支持中文和英文双语。Electron 主进程在后台每秒采集代理控制器数据，按目标域名展示下载、上传速度和本机累计流量，不会主动发起测速。
 
-NetMeter is a compact always-on-top traffic tile for Windows. The interface ships in Chinese and English. It reads the byte counters of the proxy controller's active connections and shows per-domain download/upload speed and local totals. It never runs an active speed test.
+NetMeter is a compact always-on-top traffic tile for Windows. The interface ships in Chinese and English. The Electron main process samples the proxy controller in the background once per second and shows per-domain download/upload speed and local totals. It never runs an active speed test.
 
 ## 截图 / Screenshots
 
@@ -86,9 +86,10 @@ Windows 托盘使用绿色下载、蓝色上传双箭头图标；`assets/tray/ne
 
 - 地址填写代理控制器的本机 HTTP API 地址，默认 `127.0.0.1:9097`。
 - 在 API 密钥框输入访问密钥；网址使用条目列表，点“+”新增、在输入框直接编辑、点“×”移除。每条左侧的复选框控制是否显示方格，保存后生效并记住选择；取消勾选仍保留条目和历史，继续采集，重新勾选即可恢复。旧网址自动迁移为已勾选条目。路径不参与匹配，子域名会归并到对应方格。监听地址和密钥右侧的眼睛按钮只在显示与隐藏之间切换，不写入剪贴板。
-- 保存后，小窗每秒读取一次控制器活动连接并比较字节计数增量，得出当前速度。控制器只提供活动连接时，连接结束前未被轮询到的最后一段流量可能无法计入。
+- 保存后由 Electron 主进程每秒读取一次控制器活动连接；渲染器只展示后台账本，不负责记账。窗口隐藏、最小化或被遮挡时采集仍继续，且请求不会因后台渲染节流而暂停。控制器全局累计计数用于校验已结束连接的总流量；域名累计仍是活动连接观测下界，关闭前未被观察到的尾段无法可靠归属到域名，界面不会猜测分配。
 - 密钥不写入 `localStorage`、项目文件或日志，而是由 Electron `safeStorage` 使用 Windows 当前用户凭据加密保存。首次输入后，重启应用无需再次输入；密钥框留空会继续使用已保存值。禁用控制器不会删除已保存密钥，只有更换控制器地址时才需要重新输入。
-- 历史流量按分钟聚合到当前本机浏览器配置的 IndexedDB，可选保留 7 天、30 天或长期；新分钟样本同时记录下载与上传各自的有流量秒数，供历史均速曲线使用；旧样本可能缺少活跃秒，无法精确计算均速。详情图表可选择最近 1/6/24 小时或 7/30 天，并横向滚动。累计总量保存在浏览器本地设置中。
+- 历史流量由主进程 SQLite 账本按实际观测时间归入分钟桶，可选保留 7 天、30 天或长期；新样本同时记录下载与上传各自的有流量秒数，供历史均速曲线使用。旧版 IndexedDB 数据会幂等迁移；旧样本可能缺少活跃秒，无法精确计算均速。详情图表可选择最近 1/6/24 小时或 7/30 天，并横向滚动。
+- 采集定时器、回环 HTTP 服务和 SQLite 连接都属于 NetMeter 主进程本身。应用不会安装外部 watcher、后台服务或开机自启项；从托盘选择“退出 NetMeter”会停止采样、关闭服务和数据库，测试探针也都有硬超时并自动退出。
 
 默认控制器地址要求为本机回环地址，采集服务只绑定 `127.0.0.1`。若默认端口 `4174` 被占用，应用会尝试后续 9 个端口。
 
@@ -108,7 +109,7 @@ node server.mjs
 npm test
 ```
 
-`npm test` 覆盖均速与峰值口径、历史曲线、拖动对齐、服务端密钥处理和双语字典一致性。离屏 Electron 探针位于 `scripts/`：`i18n-probe.cjs` 校验中英文渲染与语言切换，`screenshot-probe.cjs` 生成 `docs/screenshots/` 下的效果图，`history-curve-probe.cjs` 校验历史曲线与标签栏，`domain-entries-probe.cjs` 校验网址条目的增删编辑、显示选择与重载记忆，并更新中英文设置页效果图。`generate-tray-icons.cjs` 从 SVG 重建多尺寸 ICO/PNG 和托盘预览；`tray-icon-probe.cjs` 校验像素、原生解码和 Windows 托盘注册。
+`npm test` 覆盖均速与峰值口径、历史曲线、后台账本与采集器、拖动对齐、服务端密钥处理和双语字典一致性。离屏 Electron 探针位于 `scripts/`：`i18n-probe.cjs` 校验中英文渲染与语言切换，`background-collector-probe.cjs` 验证隐藏窗口采样、短连接、重复计数与正常退出，`window-ready-probe.cjs` 校验设置页失败恢复，`screenshot-probe.cjs` 生成 `docs/screenshots/` 下的效果图，`history-curve-probe.cjs` 校验历史曲线与标签栏，`domain-entries-probe.cjs` 校验网址条目的增删编辑、显示选择与重载记忆，并更新中英文设置页效果图。`generate-tray-icons.cjs` 从 SVG 重建多尺寸 ICO/PNG 和托盘预览；`tray-icon-probe.cjs` 校验像素、原生解码和 Windows 托盘注册。所有探针使用隔离数据、硬超时并自动退出，不显示测试窗口。
 
 ---
 
@@ -153,9 +154,10 @@ The tray menu, the settings window title and the tile right-click menu follow th
 
 - The address is the local HTTP API address of your proxy controller; it defaults to `127.0.0.1:9097`.
 - Enter the access key in the API key box. Websites are editable list entries: use “+” to add one, edit its input directly, or use “×” to remove it. The checkbox controls whether its tile is shown. Save to apply and remember the selection. Unchecked entries keep collecting traffic and retain their history; check them again to restore the tile. Existing websites migrate as checked entries. Paths do not participate in matching, and subdomains are folded into the matching tile. The eye buttons next to the listen address and the key only toggle between showing and hiding; they never write to the clipboard.
-- After saving, the small window reads the controller's active connections once per second and compares the byte counters to derive the current speed. When the controller only exposes active connections, the last stretch of traffic before a connection ends may not be counted.
+- After saving, the Electron main process samples active controller connections once per second; the renderer only displays the backend ledger. Hidden, minimized, or covered windows do not stop collection. Controller-wide cumulative counters validate ended traffic, while per-domain totals remain an observed lower bound because a closing tail cannot be attributed reliably without a completion event; NetMeter does not guess that attribution.
 - The key is never written to `localStorage`, project files or logs. Electron's `safeStorage` encrypts it with the current Windows user credential. After the first entry the app restarts without asking again; leaving the key box empty keeps the saved value. Disabling the controller does not delete the saved key — only changing the controller address requires a new one.
-- Traffic history is aggregated per minute into the IndexedDB of the local browser profile and can be kept for 7 days, 30 days or forever. New minute samples record the active seconds of download and upload independently for the average-speed curve; older samples may lack those seconds and cannot yield an exact average. The detail chart supports the last 1/6/24 hours or 7/30 days with horizontal scrolling. Cumulative totals are kept in the browser's local settings.
+- Traffic history is stored in the main-process SQLite ledger and bucketed by the actual observation minute; it can be kept for 7 days, 30 days or forever. Legacy IndexedDB samples are imported idempotently. New samples record download and upload active seconds independently for the average-speed curve; older samples may lack those seconds and cannot yield an exact average. The detail chart supports the last 1/6/24 hours or 7/30 days with horizontal scrolling.
+- The sampling timer, loopback HTTP service and SQLite connection live inside the NetMeter main process. The app does not install an external watcher, background service or startup entry; choosing “Quit NetMeter” from the tray stops sampling and closes the service and database. Test probes have hard timeouts and exit automatically.
 
 The default controller address must be a loopback address, and the collector only binds to `127.0.0.1`. If the default port `4174` is taken, the app tries the following 9 ports.
 
@@ -175,4 +177,4 @@ Open `http://127.0.0.1:4174/`. This mode has no Windows tray and no separate alw
 npm test
 ```
 
-`npm test` covers the average and peak definitions, the history curve, drag alignment, the server-side secret handling and the consistency of the bilingual dictionary. The offscreen Electron probes live in `scripts/`: `i18n-probe.cjs` verifies the Chinese and English rendering and the language switch, `screenshot-probe.cjs` produces the images under `docs/screenshots/`, and `history-curve-probe.cjs` verifies the history curve and its tab bar, and `domain-entries-probe.cjs` checks website editing, visibility and reload persistence while updating the bilingual settings screenshots. `generate-tray-icons.cjs` rebuilds ICO/PNG sizes and the preview from the SVG source; `tray-icon-probe.cjs` checks pixels, native decoding and Windows tray registration.
+`npm test` covers the average and peak definitions, the history curve, the backend ledger and collector (including retries, ID reuse, cross-minute buckets and short connections), drag alignment, server-side secret handling and the consistency of the bilingual dictionary. The offscreen Electron probes live in `scripts/`: `i18n-probe.cjs` verifies Chinese and English rendering and the language switch; `background-collector-probe.cjs` covers hidden-window cadence, short connections, duplicate accounting and normal quit; `window-ready-probe.cjs` checks settings failure recovery; `screenshot-probe.cjs` produces images under `docs/screenshots/`; `history-curve-probe.cjs` verifies the history curve and tab bar; and `domain-entries-probe.cjs` checks website editing, visibility and reload persistence while updating the bilingual settings screenshots. `generate-tray-icons.cjs` rebuilds ICO/PNG sizes and the preview from the SVG source; `tray-icon-probe.cjs` checks pixels, native decoding and Windows tray registration. All probes use isolated data, have hard timeouts and exit automatically without displaying test windows.
