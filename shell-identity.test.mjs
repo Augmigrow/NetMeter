@@ -13,9 +13,9 @@ test('Windows relaunch metadata names NetMeter and preserves the app command and
   assert.equal(identity.shortcut.args, '"C:\\My Projects\\NetMeter"');
   assert.equal(identity.window.appIconIndex, 0);
 });
-test('both windows publish relaunch metadata and old shortcuts are repaired on every start', () => {
+test('the settings window and every tile publish relaunch metadata and old shortcuts are repaired on every start', () => {
   assert.match(main, /settingsWindow\.setAppDetails\(shellIdentity/);
-  assert.match(main, /widgetWindow\.setAppDetails\(shellIdentity/);
+  assert.match(main, /window\.setAppDetails\(shellIdentity/);
   assert.match(main, /shell\.writeShortcutLink\(startMenuShortcutPath\(\), 'update'/);
   assert.match(main, /app\.setName\('NetMeter'\)/);
   assert.match(main, /app\.setAppUserModelId\(APP_ID\)/);

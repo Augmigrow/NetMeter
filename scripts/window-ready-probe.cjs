@@ -22,15 +22,15 @@ app.whenReady().then(()=>session.defaultSession.webRequest.onBeforeRequest({urls
 }));
 (async()=>{
   await import(pathToFileURL(join(root,'main.mjs')).href);await app.whenReady();
-  let settings,widget;
-  for(let i=0;i<100;i++){widget=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('view=widget'));settings=BrowserWindow.getAllWindows().find(w=>w!==widget&&w.getBounds().width>=440);if(settings&&widget&&!settings.webContents.isLoading())break;await pause(100);}
+  let settings;
+  for(let i=0;i<100;i++){settings=BrowserWindow.getAllWindows().find(w=>w.getBounds().width>=440);if(settings&&!settings.webContents.isLoading())break;await pause(100);}
   await pause(300);
   const failureText=await settings.webContents.executeJavaScript('document.body.textContent');
   check('failed settings navigation displays a readable fallback, never an unexplained black page',/设置加载失败/.test(failureText),failureText);
   const diagnostic=readFileSync(join(profile,'user-data','window-load-errors.jsonl'),'utf8');
   check('failure diagnostics do not contain addresses, keys or page URLs',diagnostic.includes('load_failed')&&!/http|secret|127\.0\.0\.1/.test(diagnostic),JSON.parse(diagnostic.split('\n')[0]));
   fail=false;delayNext=true;
-  await widget.webContents.executeJavaScript('window.netmeterDesktop.openSettings()');
+  await settings.webContents.executeJavaScript('window.netmeterDesktop.openSettings()');
   for(let i=0;i<100&&!releaseNextLoad;i++)await pause(20);
   if(!releaseNextLoad)throw Error('retry_request_missing');
   simulatedClose=true;settings.close();simulatedClose=false;
@@ -39,13 +39,14 @@ app.whenReady().then(()=>session.defaultSession.webRequest.onBeforeRequest({urls
   for(let i=0;i<100;i++){if(!settings.webContents.isLoading()&&settings.netmeterPageReady)break;await pause(50);}
   await pause(150);
   check('closing during a retry prevents a late load callback from reopening the window',!settings.netmeterShowRequested&&(settings.probeShowRequests||0)===showRequestsAfterClose&&!settings.isVisible(),{requested:settings.netmeterShowRequested,lateShowRequests:(settings.probeShowRequests||0)-showRequestsAfterClose});
-  await widget.webContents.executeJavaScript('window.netmeterDesktop.openSettings()');
+  // The settings window may ask the main process to retry its own page.
+  require('electron').ipcMain.emit('app:open-settings', { sender: settings.webContents });
   for(let i=0;i<100;i++){if(!settings.webContents.isLoading()&&settings.webContents.getURL().startsWith('http:'))break;await pause(100);}
   await pause(300);
   const content=await settings.webContents.executeJavaScript("({heading:document.querySelector('.settings h2')?.textContent,fields:document.querySelectorAll('#preferences input').length,bg:getComputedStyle(document.body).backgroundColor})");
   check('reopening settings retries and renders the actual settings form',content.fields>3&&content.heading==='外部控制器',content);
   check('settings has an opaque light background and a ready first frame',settings.netmeterPageReady&&content.bg==='rgb(255, 255, 255)',{ready:settings.netmeterPageReady,bg:content.bg});
-  check('widget stays alive independently without visible test windows',!widget.isDestroyed()&&!widget.isVisible(),true);
+  check('the settings window stays alive independently without visible test windows',!settings.isDestroyed()&&!settings.isVisible(),true);
   // Offscreen composition is explicit: never show the real settings window just to capture it.
   const captureWindow=new BrowserWindow({show:false,width:560,height:1200,backgroundColor:'#ffffff',webPreferences:{offscreen:true,backgroundThrottling:false,contextIsolation:true,sandbox:true}});
   await captureWindow.loadURL(settings.webContents.getURL());await pause(300);

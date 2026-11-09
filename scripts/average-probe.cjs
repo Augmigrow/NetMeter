@@ -89,7 +89,10 @@ const server = createServer(async (request, response) => {
   await win.webContents.executeJavaScript(`(() => {
     document.getElementById('controllerEnabled').checked = true;
     document.getElementById('controllerAddress').value = '127.0.0.1:9097';
-    document.getElementById('domains').value = 'example.com';
+    document.getElementById('addDomain').click();
+    const row = document.querySelector('.domain-entry');
+    row.querySelector('.domain-url').value = 'example.com';
+    row.querySelector('.domain-url').dispatchEvent(new Event('input', { bubbles: true }));
     const select = document.getElementById('avgWindow');
     select.value = '2分钟';
     select.dispatchEvent(new Event('change', { bubbles: true }));

@@ -58,7 +58,7 @@ test('Electron loads the real ICO and rejects empty icons before creating the tr
   assert.match(createTray, /new Tray\(iconPath\)/);
   assert.doesNotMatch(createTray, /image\/svg\+xml|createFromDataURL/);
   assert.match(createTray, /tray\.setToolTip\('NetMeter'\)/);
-  assert.match(createTray, /tray\.on\('click', toggleWidget\)/);
+  assert.match(createTray, /tray\.on\('click', toggleTiles\)/);
 });
 
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -79,10 +79,10 @@ test('startup replaces the stale window ICO with the same shipped transfer icon 
     await helpers.ensureAppIcon();
     assert.deepEqual(await readFile(helpers.appIconPath()), asset('netmeter.ico'));
     const startup = mainSource.slice(mainSource.indexOf('app.whenReady().then'));
-    for (const call of ['startLocalServer(', 'createTray();', 'showWidget();', 'showSettings();']) {
+    for (const call of ['startLocalServer(', 'createTray();', 'ensureSettingsWindow();', 'reconcileTiles(']) {
       assert.ok(startup.indexOf('await ensureAppIcon();') < startup.indexOf(call), call);
     }
-    assert.equal((mainSource.match(/icon: appIconPath\(\)/g) || []).length, 2);
+    assert.equal((mainSource.match(/icon: appIconPath\(\)/g) || []).length, 3);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

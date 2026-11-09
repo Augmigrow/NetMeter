@@ -42,12 +42,19 @@ test('migration ignores invalid entries and merges exact duplicates without losi
 test('only selected entries render while hidden entries keep their layout order', () => {
   const entries = [{ url: 'a', visible: false }, { url: 'b', visible: true }];
   const getNames = new Function('readDomainEntries',
-    'let meterOrder = ["b", "a"];\n' + extractFunction('targetNames') + '\nreturn targetNames;')(() => entries);
+    'let meterOrder = ["b", "a"]; const isTileView = false, tileKey = "";\n' + extractFunction('targetNames') + '\nreturn targetNames;')(() => entries);
   assert.deepEqual(getNames(), ['b']);
   entries[0].visible = true;
   assert.deepEqual(getNames(), ['b', 'a']);
   entries.forEach(entry => { entry.visible = false; });
   assert.deepEqual(getNames(), []);
+});
+
+test('a tile window renders only the tile it owns', () => {
+  const entries = [{ url: 'a', visible: true }, { url: 'b', visible: true }];
+  const getNames = new Function('readDomainEntries',
+    'let meterOrder = ["a", "b"]; const isTileView = true, tileKey = "b";\n' + extractFunction('targetNames') + '\nreturn targetNames;')(() => entries);
+  assert.deepEqual(getNames(), ['b']);
 });
 
 test('unchecked entries remain in the polling target set', () => {

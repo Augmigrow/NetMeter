@@ -60,7 +60,9 @@ npm install
 npm start
 ```
 
-启动后设置窗口和置顶方格会同时显示，两者可独立操作；应用同时驻留在 Windows 托盘。设置窗与方格重叠时会自动移动到方格旁边。在方格任意位置按住鼠标左键拖动可整体移动悬浮窗口，所有方格一起走；按住 `Ctrl` 拖动才是摆放单个方格（Ctrl 在按下鼠标前后按都有效，拖动中按下会切换为单格拖动），横排、上下排列或错位摆放都可以，松手后保留实际位置并保存在本机。拖动时方格始终跟随指针，其他方格的 X 或 Y 坐标进入 8px 范围只显示对齐参考线，不会吸附；松手后落点就是指针位置，拖动一个方格时其余方格既不跟随也不偏移。拖动单个方格期间悬浮窗会按需扩大或平移，方格始终跟随指针，放开后再收紧到所有方格实际占用的范围，窗口内不留透明空隙。悬浮窗在屏幕上的位置会记住，重启后回到同一位置。右键方格可打开设置、隐藏方格或退出，单击托盘图标可显示/隐藏方格。
+启动后，每个已勾选的网址显示为独立的置顶方格窗口；设置窗默认隐藏，点击任意方格齿轮或托盘设置入口都会打开同一个全局设置窗口。方格窗口独立，网址列表、主题、界面语言、控制器配置和后台流量账本仍由同一个 NetMeter 应用共享；应用同时驻留在 Windows 托盘。
+
+在任意方格上按住鼠标左键拖动可整体移动所有方格，保持彼此间距；按住 `Ctrl` 拖动则只移动指针下的方格（Ctrl 在按下鼠标前后按都有效，拖动中按下也能切换为单格拖动）。靠近其他方格时会按 X/Y 轴独立自动对齐；远离候选后会脱离吸附。单格拖动不会移动其他方格，可跨屏连续拖动；每格位置保存在本机。右键方格可打开全局设置、隐藏所有方格或退出，单击托盘图标可显示/隐藏整组方格。
 
 Windows 托盘使用绿色下载、蓝色上传双箭头图标；`assets/tray/netmeter.ico` 含 16–64px 七档尺寸，避免原 SVG 被原生接口解码为空图。单击和右键菜单保持不变。
 
@@ -128,7 +130,9 @@ npm install
 npm start
 ```
 
-After launch the settings window and the always-on-top tiles are visible at the same time and can be operated independently; the app also stays in the Windows tray. When the two windows overlap the settings window moves aside instead of covering the tiles. A plain left-button drag anywhere on a tile moves the whole widget with all tiles; holding `Ctrl` while dragging moves only the tile under the pointer (Ctrl works before or after the button goes down, and pressing it mid-drag switches to a single-tile drag). Tiles can be arranged in a row, in a column or out of alignment, and the position you drop them at is kept on this machine. During a drag the tile follows the pointer exactly; a neighbouring tile's X or Y coordinate within 8px only shows an alignment guide and never snaps. Dragging one tile never moves or shifts the others. The widget grows or pans as needed while a single tile is dragged, then tightens to the actual area the tiles occupy, leaving no transparent gap inside the window. The widget's position on screen is remembered and restored on the next launch. Right-click a tile to open the settings, hide the tiles or quit; click the tray icon to show or hide them.
+On startup, each checked domain appears in its own always-on-top tile window, and the settings window stays hidden. Clicking any tile's gear or the tray's settings command opens the same global settings window. The tile windows are independent, while the domain list, theme, language, controller configuration, and traffic ledger remain shared by the single NetMeter app in the Windows tray.
+
+A plain left-button drag anywhere on a tile moves all visible tiles by the same desktop displacement. Holding `Ctrl` while dragging moves only the tile under the pointer; Ctrl works before or after mouse-down, and pressing it mid-drag switches to a single-tile drag. When a tile approaches an eligible neighbor, it actually snaps independently on X or Y; the entry threshold is 8 logical pixels and it detaches as you move away. Neighbors must overlap or touch on the perpendicular axis, and a single-tile drag never moves another tile. Free placement, overlap, and continuous cross-monitor movement are supported. Tile positions are saved locally. Right-click a tile to open the shared settings, hide all tiles, or quit; click the tray icon to show or hide the tile group.
 
 The Windows tray uses green download and blue upload arrows. `assets/tray/netmeter.ico` includes seven sizes from 16 to 64px, replacing the SVG input that decoded as an empty native image. Click and context-menu behavior is unchanged.
 

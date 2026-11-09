@@ -31,15 +31,23 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
   await import(pathToFileURL(path.join(root, 'main.mjs')).href);
   await app.whenReady();
   let win;
+  let settingsWindow;
   for (let i = 0; i < 100; i += 1) {
-    win = BrowserWindow.getAllWindows().find(w => /view=widget/.test(w.webContents.getURL()));
+    settingsWindow = BrowserWindow.getAllWindows().find(w => /view=settings/.test(w.webContents.getURL()));
+    if (settingsWindow && !settingsWindow.webContents.isLoading()) break;
+    await pause(100);
+  }
+  if (!settingsWindow) throw Error('Settings did not start');
+  await settingsWindow.webContents.executeJavaScript(`localStorage.setItem('netmeter-controller-v2', JSON.stringify({ controllerEnabled: false, domains: ['example.com'], history: '30天', avgWindow: '5分钟', historyTotals: { 'example.com': { down: 920483901, up: 204902300 } }, lightTheme: false }));`);
+  settingsWindow.webContents.reload();
+  for (let i = 0; i < 100; i += 1) {
+    win = BrowserWindow.getAllWindows().find(w => /view=tile/.test(w.webContents.getURL()));
     if (win && !win.webContents.isLoading()) break;
     await pause(100);
   }
-  if (!win) throw Error('Real widget did not start');
-  const settings = BrowserWindow.getAllWindows().find(w => /view=settings/.test(w.webContents.getURL()));
-  // The settings window is independent, but this fixture never displays it.
-  settings.show();
+  if (!win) throw Error('Real tile did not start');
+  const settings = settingsWindow;
+  // The settings window is independent and stays hidden in this fixture.
   const run = async code => {
     const result = await win.webContents.executeJavaScript(code);
     // Hidden Chromium can defer native scroll events. These are DOM-interaction checks,
@@ -86,7 +94,7 @@ function flush() { for (const name of ['history-timeline-probe.log', 'history-cu
     return result;
   }
   let data = await state();
-  check('actual history window retains 380x306 and independent settings without displaying test windows', win.getContentSize().join('x') === '380x306' && !settings.isDestroyed() && settings.netmeterShowRequested && !settings.isVisible() && !win.isVisible(), win.getContentSize());
+  check('actual history window retains 380x306 and independent settings without displaying test windows', win.getContentSize().join('x') === '380x306' && !settings.isDestroyed() && !settings.isVisible() && !win.isVisible(), win.getContentSize());
   check('24h traffic initially displays its entire selected range', data.bars === 24 && data.width === data.client && data.left === 0, data);
   check('range header shows visible dated time boundaries and duration', /\d+\/\d+ \d{2}:\d{2} — \d+\/\d+ \d{2}:\d{2}/.test(data.label) && /可视/.test(data.visible) && data.visibleEnd - data.visibleStart < 24 * 3600000, data);
   check('only timeline overflows, never the outer window or vertically', data.outerWidth === data.innerWidth && data.scrollHeight <= data.height && data.bottom <= data.innerHeight, data);

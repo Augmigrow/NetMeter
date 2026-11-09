@@ -127,9 +127,9 @@ test('the electron tray menu and settings title are localised', () => {
 });
 
 test('each window gets its own localised title', () => {
-  assert.match(source, /document\.title = view === 'widget' \? t\('app\.titleWidget'\) : t\('app\.titleSettings'\);/);
+  assert.match(source, /document\.title = surfaceMode \? t\('app\.titleWidget'\) : t\('app\.titleSettings'\);/);
   const main = readFileSync(join(root, 'main.mjs'), 'utf8');
   assert.match(main, /titleWidget: 'NetMeter Controller Tiles'/);
   assert.match(main, /title: strings\(\)\.titleWidget/);
-  assert.match(main, /widgetWindow\.setTitle\(strings\(\)\.titleWidget\)/);
+  assert.match(main, /tile\.window\.setTitle\(strings\(\)\.titleWidget\)/);
 });

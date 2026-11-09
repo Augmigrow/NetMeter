@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, safeStorage, shell, dialog } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, safeStorage, shell, dialog } from 'electron';
 import { resolve, dirname, join } from 'node:path';
 import { appendFile, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -6,27 +6,46 @@ import { fileURLToPath } from 'node:url';
 import { createNetMeterServer } from './server.mjs';
 import { createPinToStartAction } from './start-menu.mjs';
 import { APP_ID, shellIdentity } from './shell-identity.mjs';
+import { TILE_HEIGHT, TILE_WIDTH } from './drag-geometry.mjs';
+import { createDragController } from './tile-drag.mjs';
+import { defaultTilePosition as getDefaultTilePosition } from './tile-layout.mjs';
+import { historyWindowInputRegion, TILE_WINDOW_INPUT_REGION } from './tile-window-region.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 app.setName('NetMeter');
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();
-app.on('second-instance', () => { if (app.isReady()) { showWidget(); showSettings(); } });
+app.on('second-instance', () => { if (app.isReady()) { showTiles(); showSettings(); } });
+
+// Every visible tile owns one independent frameless native window. The native
+// window is slightly larger than the tile so the CSS shadow keeps a fixed and
+// separate padding; the tile content box itself stays exactly 180x148.
+const TILE_PADDING = 6;
+const TILE_WINDOW_WIDTH = TILE_WIDTH + TILE_PADDING * 2;
+const TILE_WINDOW_HEIGHT = TILE_HEIGHT + TILE_PADDING * 2;
+const HISTORY_WIDTH = 380;
+const HISTORY_HEIGHT = 306;
+const LAYOUT_VERSION = 2;
+const SHARED_STATE_VERSION = 1;
+
 let server;
 let serverPort;
 let settingsWindow;
-let widgetWindow;
+let emptyWindow;
 let tray;
 let quitting = false;
-let widgetCanvasWidth = 380;
-let widgetCanvasHeight = 160;
-let widgetCanvasInitialized = false;
-let historyOpen = false;
-let widgetWindowStateSaveTimer = null;
-let widgetWindowState = null;
 let uiLanguage = 'zh';
 let shutdownStarted = false;
 let shutdownFinished = false;
+let layout = { version: LAYOUT_VERSION, tiles: {} };
+let sharedState = { version: SHARED_STATE_VERSION, entries: [] };
+let legacyWidgetOrigin = null;
+let layoutWriteQueue = Promise.resolve();
+let sharedStateWriteQueue = Promise.resolve();
+let tilesVisible = true;
+let sharedStateReceived = false;
+
+const tiles = new Map();
 
 const UI_STRINGS = {
   zh: {
@@ -61,7 +80,7 @@ const UI_STRINGS = {
     pinOpenShortcut: 'Open shortcut location',
     pinActionFailed: 'Pinning did not finish. Please try again.',
     pinInstallFailed: 'Could not create the NetMeter shortcut',
-    pinInstallFailedDetail: 'Nothing was pinned. Check write access to the Start menu folder and try again.',
+    pinInstallFailedDetail: 'Nothing was pinned. Check write access to the Start Menu folder and try again.',
     pinSuccess: 'NetMeter is now pinned to Start',
     pinAlready: 'NetMeter is already pinned to Start',
     ok: 'OK',
@@ -75,14 +94,13 @@ function strings() {
   return UI_STRINGS[uiLanguage] || UI_STRINGS.zh;
 }
 
-
 const pinToStartMenu = createPinToStartAction({
   installShortcut: installStartMenuShortcut,
   requestPin: requestStartMenuPin,
   revealShortcut: () => shell.showItemInFolder(startMenuShortcutPath()),
   getStrings: strings,
   showDialog: options => {
-    const parent = settingsWindow?.isVisible() ? settingsWindow : widgetWindow?.isVisible() ? widgetWindow : null;
+    const parent = settingsWindow?.isVisible() ? settingsWindow : firstVisibleTileWindow();
     return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
   }
 });
@@ -91,7 +109,15 @@ function controllerConfigPath() {
   return join(app.getPath('userData'), 'controller-config.bin');
 }
 
-function widgetWindowStatePath() {
+function layoutPath() {
+  return join(app.getPath('userData'), 'tile-layout.json');
+}
+
+function sharedStatePath() {
+  return join(app.getPath('userData'), 'shared-state.json');
+}
+
+function legacyWidgetStatePath() {
   return join(app.getPath('userData'), 'widget-window.json');
 }
 
@@ -115,33 +141,92 @@ function startMenuShortcutPath() {
   return join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'NetMeter.lnk');
 }
 
-async function loadWidgetWindowState() {
+async function loadLegacyWidgetOrigin() {
   try {
-    const stored = JSON.parse(await readFile(widgetWindowStatePath(), 'utf8'));
+    const stored = JSON.parse(await readFile(legacyWidgetStatePath(), 'utf8'));
     if (Number.isFinite(stored?.x) && Number.isFinite(stored?.y)) return { x: stored.x, y: stored.y };
   } catch {
-    // no stored position yet
+    // No legacy widget origin yet.
   }
   return null;
 }
 
-function clampWidgetPosition(x, y, bounds) {
-  const workArea = screen.getDisplayNearestPoint({ x, y }).workArea;
-  return {
-    x: Math.max(workArea.x - bounds.width + 80, Math.min(workArea.x + workArea.width - 80, Math.round(x))),
-    y: Math.max(workArea.y, Math.min(workArea.y + workArea.height - 40, Math.round(y)))
-  };
+async function loadLayout() {
+  try {
+    const stored = JSON.parse(await readFile(layoutPath(), 'utf8'));
+    if (stored?.version !== LAYOUT_VERSION || !stored.tiles || typeof stored.tiles !== 'object') return null;
+    const tilesState = {};
+    for (const [key, position] of Object.entries(stored.tiles)) {
+      if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) continue;
+      tilesState[key] = { x: Math.round(position.x), y: Math.round(position.y) };
+    }
+    return { version: LAYOUT_VERSION, tiles: tilesState };
+  } catch {
+    return null;
+  }
 }
 
-function saveWidgetWindowState() {
-  if (!widgetWindow || widgetWindow.isDestroyed()) return;
-  const bounds = widgetWindow.getBounds();
-  return writeFile(widgetWindowStatePath(), JSON.stringify({ x: bounds.x, y: bounds.y }), { mode: 0o600 }).catch(() => {});
+function writeLayout() {
+  const payload = JSON.stringify({ version: LAYOUT_VERSION, tiles: layout.tiles }, null, 2);
+  layoutWriteQueue = layoutWriteQueue
+    .then(() => writeFile(layoutPath(), payload, { mode: 0o600 }))
+    .catch(() => {});
+  return layoutWriteQueue;
 }
 
-function scheduleWidgetWindowStateSave() {
-  clearTimeout(widgetWindowStateSaveTimer);
-  widgetWindowStateSaveTimer = setTimeout(saveWidgetWindowState, 400);
+// Layout writes are serialized in the main process, so one renderer can never
+// overwrite another tile with an old shared snapshot.
+function persistTilePositions(positions) {
+  let changed = false;
+  for (const [key, position] of Object.entries(positions || {})) {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) continue;
+    const next = { x: Math.round(position.x), y: Math.round(position.y) };
+    const current = layout.tiles[key];
+    if (current && current.x === next.x && current.y === next.y) continue;
+    layout.tiles[key] = next;
+    changed = true;
+  }
+  if (!changed) return layoutWriteQueue;
+  return writeLayout();
+}
+
+function writeSharedState() {
+  const payload = JSON.stringify(sharedState, null, 2);
+  sharedStateWriteQueue = sharedStateWriteQueue
+    .then(() => writeFile(sharedStatePath(), payload, { mode: 0o600 }))
+    .catch(() => {});
+  return sharedStateWriteQueue;
+}
+
+async function loadSharedState() {
+  try {
+    const stored = JSON.parse(await readFile(sharedStatePath(), 'utf8'));
+    if (stored?.version !== SHARED_STATE_VERSION || !Array.isArray(stored.entries)) return null;
+    return { version: SHARED_STATE_VERSION, entries: stored.entries };
+  } catch {
+    return null;
+  }
+}
+
+// The previous build stored one widget origin plus renderer relative
+// positions. They are migrated once into absolute desktop coordinates; the
+// traffic data, the credentials and the configuration stay untouched.
+function migrateLegacyLayout(legacyPositions) {
+  // The migration runs at most once: an existing layout is never rewritten.
+  if (Object.keys(layout.tiles).length) return false;
+  if (!legacyWidgetOrigin || !legacyPositions) return false;
+  const migrated = {};
+  for (const [key, position] of Object.entries(legacyPositions)) {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) continue;
+    migrated[key] = {
+      x: Math.round(legacyWidgetOrigin.x + position.x),
+      y: Math.round(legacyWidgetOrigin.y + position.y)
+    };
+  }
+  if (!Object.keys(migrated).length) return false;
+  layout = { version: LAYOUT_VERSION, tiles: migrated };
+  writeLayout();
+  return true;
 }
 
 function installStartMenuShortcut() {
@@ -223,27 +308,59 @@ function startLocalServer(initialConfig) {
   });
 }
 
-function pageUrl(view) {
-  return `http://127.0.0.1:${serverPort}/?view=${view}`;
+function pageUrl(view, key) {
+  const url = new URL(`http://127.0.0.1:${serverPort}/`);
+  url.searchParams.set('view', view);
+  if (key) url.searchParams.set('key', key);
+  return url.toString();
 }
 
-function placeSettingsBesideWidget() {
-  if (!widgetWindow?.isVisible() || !settingsWindow || settingsWindow.isDestroyed()) return;
-  const widgetBounds = widgetWindow.getBounds();
+function firstVisibleTileWindow() {
+  for (const tile of tiles.values()) {
+    if (!tile.window.isDestroyed() && tile.window.isVisible()) return tile.window;
+  }
+  return null;
+}
+
+function tileBoundsUnion() {
+  let union = null;
+  for (const tile of tiles.values()) {
+    if (tile.window.isDestroyed()) continue;
+    const bounds = tile.window.getBounds();
+    if (!union) {
+      union = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+      continue;
+    }
+    const left = Math.min(union.x, bounds.x);
+    const top = Math.min(union.y, bounds.y);
+    union = {
+      x: left,
+      y: top,
+      width: Math.max(union.x + union.width, bounds.x + bounds.width) - left,
+      height: Math.max(union.y + union.height, bounds.y + bounds.height) - top
+    };
+  }
+  return union;
+}
+
+function placeSettingsBesideTiles() {
+  if (!settingsWindow || settingsWindow.isDestroyed()) return;
+  const union = tileBoundsUnion();
+  if (!union) return;
   const settingsBounds = settingsWindow.getBounds();
-  const overlaps = widgetBounds.x < settingsBounds.x + settingsBounds.width &&
-    widgetBounds.x + widgetBounds.width > settingsBounds.x &&
-    widgetBounds.y < settingsBounds.y + settingsBounds.height &&
-    widgetBounds.y + widgetBounds.height > settingsBounds.y;
+  const overlaps = union.x < settingsBounds.x + settingsBounds.width &&
+    union.x + union.width > settingsBounds.x &&
+    union.y < settingsBounds.y + settingsBounds.height &&
+    union.y + union.height > settingsBounds.y;
   if (!overlaps) return;
-  const workArea = screen.getDisplayMatching(widgetBounds).workArea;
+  const workArea = screen.getDisplayMatching(union).workArea;
   const clampX = value => Math.max(workArea.x, Math.min(workArea.x + workArea.width - settingsBounds.width, value));
   const clampY = value => Math.max(workArea.y, Math.min(workArea.y + workArea.height - settingsBounds.height, value));
   const candidates = [
-    { x: widgetBounds.x + widgetBounds.width + 12, y: clampY(widgetBounds.y) },
-    { x: widgetBounds.x - settingsBounds.width - 12, y: clampY(widgetBounds.y) },
-    { x: clampX(widgetBounds.x), y: widgetBounds.y + widgetBounds.height + 12 },
-    { x: clampX(widgetBounds.x), y: widgetBounds.y - settingsBounds.height - 12 }
+    { x: union.x + union.width + 12, y: clampY(union.y) },
+    { x: union.x - settingsBounds.width - 12, y: clampY(union.y) },
+    { x: clampX(union.x), y: union.y + union.height + 12 },
+    { x: clampX(union.x), y: union.y - settingsBounds.height - 12 }
   ];
   const position = candidates.find(candidate => candidate.x >= workArea.x && candidate.y >= workArea.y &&
     candidate.x + settingsBounds.width <= workArea.x + workArea.width &&
@@ -255,6 +372,28 @@ function placeSettingsBesideWidget() {
 function recordWindowFailure(view, code) {
   // No page URLs, configuration, website history or credentials in diagnostics.
   appendFile(join(app.getPath('userData'), 'window-load-errors.jsonl'), JSON.stringify({ at: Date.now(), view, code }) + '\n').catch(() => {});
+}
+
+function applyTileInputRegion(tile) {
+  const window = tile?.window;
+  if (!window || window.isDestroyed() || !['win32', 'linux'].includes(process.platform)) return;
+  try {
+    if (tile.historyOpen) {
+      const [width, height] = window.getContentSize();
+      window.setShape(historyWindowInputRegion(width, height));
+    } else {
+      window.setShape(TILE_WINDOW_INPUT_REGION);
+    }
+    tile.inputRegionScaleFactor = screen.getDisplayMatching(window.getBounds()).scaleFactor;
+  } catch {
+    if (tile.inputRegionFailureRecorded) return;
+    tile.inputRegionFailureRecorded = true;
+    recordWindowFailure('tile-input-region', 'set_shape_failed');
+  }
+}
+
+function refreshTileInputRegions() {
+  for (const tile of tiles.values()) applyTileInputRegion(tile);
 }
 
 function loadSettingsPage(window) {
@@ -275,72 +414,184 @@ function presentSettings(window) {
   window.focus();
 }
 
+function ensureSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) return settingsWindow;
+  settingsWindow = new BrowserWindow({
+    show: false,
+    width: 560,
+    height: 740,
+    minWidth: 440,
+    minHeight: 600,
+    title: strings().settingsTitle,
+    backgroundColor: '#ffffff',
+    autoHideMenuBar: true,
+    icon: appIconPath(),
+    webPreferences: {
+      preload: resolve(root, 'preload.cjs'),
+      backgroundThrottling: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  settingsWindow.setAppDetails(shellIdentity(process.execPath, root, appIconPath()).window);
+  settingsWindow.once('ready-to-show', () => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.netmeterPageReady = true;
+      presentSettings(settingsWindow);
+    }
+  });
+  settingsWindow.webContents.on('render-process-gone', (_event, details) => {
+    recordWindowFailure('settings', details.reason);
+    settingsWindow.netmeterLoadFailed = true;
+  });
+  settingsWindow.on('close', event => {
+    if (!quitting) {
+      event.preventDefault();
+      settingsWindow.netmeterShowRequested = false;
+      settingsWindow.hide();
+      settingsWindow.setAlwaysOnTop(false);
+    }
+  });
+  loadSettingsPage(settingsWindow);
+  return settingsWindow;
+}
+
+// One singleton settings window serves every tile. A gear click from any tile
+// focuses this instance instead of opening a second configuration surface.
 function showSettings() {
-  if (!settingsWindow || settingsWindow.isDestroyed()) {
-    settingsWindow = new BrowserWindow({
-      show: false,
-      width: 560,
-      height: 740,
-      minWidth: 440,
-      minHeight: 600,
-      title: strings().settingsTitle,
-      backgroundColor: '#ffffff',
-      autoHideMenuBar: true,
-      icon: appIconPath(),
-      webPreferences: {
-        preload: resolve(root, 'preload.cjs'),
-        backgroundThrottling: false,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true
-      }
-    });
-    settingsWindow.setAppDetails(shellIdentity(process.execPath, root, appIconPath()).window);
-    settingsWindow.once('ready-to-show', () => {
+  const window = ensureSettingsWindow();
+  window.setTitle(strings().settingsTitle);
+  placeSettingsBesideTiles();
+  window.netmeterShowRequested = true;
+  if (window.netmeterLoadFailed) {
+    window.netmeterLoadFailed = false;
+    window.webContents.once('did-finish-load', () => {
       if (settingsWindow && !settingsWindow.isDestroyed()) {
         settingsWindow.netmeterPageReady = true;
         presentSettings(settingsWindow);
       }
     });
-    settingsWindow.webContents.on('render-process-gone', (_event, details) => {
-      recordWindowFailure('settings', details.reason);
-      settingsWindow.netmeterLoadFailed = true;
-    });
-    settingsWindow.on('close', event => {
-      if (!quitting) {
-        event.preventDefault();
-        settingsWindow.netmeterShowRequested = false;
-        settingsWindow.hide();
-        settingsWindow.setAlwaysOnTop(false);
-      }
-    });
-    loadSettingsPage(settingsWindow);
+    loadSettingsPage(window);
   }
-  settingsWindow.setTitle(strings().settingsTitle);
-  placeSettingsBesideWidget();
-  settingsWindow.netmeterShowRequested = true;
-  if (settingsWindow.netmeterLoadFailed) {
-    settingsWindow.netmeterLoadFailed = false;
-    settingsWindow.webContents.once('did-finish-load', () => { if (settingsWindow && !settingsWindow.isDestroyed()) { settingsWindow.netmeterPageReady = true; presentSettings(settingsWindow); } });
-    loadSettingsPage(settingsWindow);
-  }
-  presentSettings(settingsWindow);
+  presentSettings(window);
 }
 
-function showWidget() {
-  if (!widgetWindow || widgetWindow.isDestroyed()) {
-    widgetWindow = new BrowserWindow({
+function showTiles() {
+  tilesVisible = true;
+  for (const tile of tiles.values()) {
+    if (tile.window.isDestroyed()) continue;
+    tile.window.show();
+    tile.window.setAlwaysOnTop(true, 'screen-saver');
+  }
+  if (emptyWindow && !emptyWindow.isDestroyed()) emptyWindow.show();
+}
+
+function hideTiles() {
+  tilesVisible = false;
+  for (const tile of tiles.values()) {
+    if (tile.window.isDestroyed()) continue;
+    tile.window.hide();
+  }
+  if (emptyWindow && !emptyWindow.isDestroyed()) emptyWindow.hide();
+}
+
+function toggleTiles() {
+  if (tilesVisible) hideTiles();
+  else showTiles();
+}
+
+function defaultTilePosition(index) {
+  return getDefaultTilePosition(index, screen.getPrimaryDisplay().workArea);
+}
+
+function createTileWindow(key) {
+  const window = new BrowserWindow({
+    show: false,
+    width: TILE_WINDOW_WIDTH,
+    height: TILE_WINDOW_HEIGHT,
+    minWidth: TILE_WINDOW_WIDTH,
+    minHeight: TILE_WINDOW_HEIGHT,
+    maxWidth: 4000,
+    maxHeight: 4000,
+    title: strings().titleWidget,
+    frame: false,
+    transparent: true,
+    resizable: true,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    icon: appIconPath(),
+    webPreferences: {
+      preload: resolve(root, 'preload.cjs'),
+      backgroundThrottling: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  window.setAppDetails(shellIdentity(process.execPath, root, appIconPath()).window);
+  window.setAlwaysOnTop(true, 'screen-saver');
+  const tile = { key, window, historyOpen: false, historyBounds: null };
+  tiles.set(key, tile);
+  applyTileInputRegion(tile);
+  window.on('resize', () => applyTileInputRegion(tile));
+  window.on('move', () => {
+    if (screen.getDisplayMatching(window.getBounds()).scaleFactor !== tile.inputRegionScaleFactor) {
+      applyTileInputRegion(tile);
+    }
+  });
+  window.on('closed', () => {
+    if (dragController.active && dragController.state.key === key) dragController.cancel();
+    tiles.delete(key);
+    updateEmptyState();
+  });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    recordWindowFailure('tile', details.reason);
+    if (dragController.active && dragController.state.key === key) dragController.cancel();
+  });
+  window.webContents.on('did-finish-load', () => applyTileInputRegion(tile));
+  window.webContents.on('context-menu', () => {
+    if (window.isDestroyed()) return;
+    const menu = Menu.buildFromTemplate([
+      { label: strings().settings, click: showSettings },
+      { id: 'pin-to-start', label: strings().pinToStart, click: () => { pinToStartMenu().catch(() => { dialog.showErrorBox(strings().pinTitle, strings().pinActionFailed); }); } },
+      { label: strings().hideWidget, click: hideTiles },
+      { type: 'separator' },
+      { label: strings().quit, click: () => app.quit() }
+    ]);
+    menu.popup({ window });
+  });
+  window.loadURL(pageUrl('tile', key));
+  positionTile(key);
+  return tile;
+}
+
+function positionTile(key) {
+  const tile = tiles.get(key);
+  if (!tile || tile.window.isDestroyed()) return;
+  const stored = layout.tiles[key];
+  if (!stored) return;
+  // The stored position is the tile content origin; the native window keeps the
+  // fixed shadow padding around it.
+  tile.window.setPosition(Math.round(stored.x - TILE_PADDING), Math.round(stored.y - TILE_PADDING));
+}
+
+function updateEmptyState() {
+  // The empty state only appears once the shared domain list is known, so the
+  // desktop never flashes an empty surface while the tiles are still loading.
+  if (!sharedStateReceived || quitting) return;
+  const needed = tiles.size === 0;
+  if (needed && !emptyWindow) {
+    emptyWindow = new BrowserWindow({
       show: false,
-      width: 192,
-      height: 160,
-      minWidth: 192,
-      minHeight: 160,
-      maxWidth: 4000,
-      maxHeight: 4000,
-      title: strings().titleWidget,
+      width: TILE_WINDOW_WIDTH,
+      height: TILE_WINDOW_HEIGHT,
       frame: false,
       transparent: true,
-      resizable: true,
+      resizable: false,
       movable: true,
       alwaysOnTop: true,
       skipTaskbar: true,
@@ -349,44 +600,56 @@ function showWidget() {
       icon: appIconPath(),
       webPreferences: {
         preload: resolve(root, 'preload.cjs'),
-        backgroundThrottling: false,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true
       }
     });
-    widgetWindow.setAppDetails(shellIdentity(process.execPath, root, appIconPath()).window);
-    widgetWindow.setAlwaysOnTop(true, 'screen-saver');
-    widgetWindow.on('closed', () => {
-      widgetWindow = null;
-      widgetCanvasInitialized = false;
-      historyOpen = false;
-    });
-    widgetWindow.on('move', scheduleWidgetWindowStateSave);
-    widgetWindow.webContents.on('context-menu', () => {
-      if (!widgetWindow) return;
-      const menu = Menu.buildFromTemplate([
-        { label: strings().settings, click: showSettings },
-        { id: 'pin-to-start', label: strings().pinToStart, click: () => { pinToStartMenu().catch(() => { dialog.showErrorBox(strings().pinTitle, strings().pinActionFailed); }); } },
-        { label: strings().hideWidget, click: () => widgetWindow?.hide() },
-        { type: 'separator' },
-        { label: strings().quit, click: () => app.quit() }
-      ]);
-      menu.popup({ window: widgetWindow });
-    });
-    widgetWindow.loadURL(pageUrl('widget'));
-    if (widgetWindowState) {
-      const position = clampWidgetPosition(widgetWindowState.x, widgetWindowState.y, widgetWindow.getBounds());
-      widgetWindow.setPosition(position.x, position.y);
-    }
+    emptyWindow.setAlwaysOnTop(true, 'screen-saver');
+    emptyWindow.setIgnoreMouseEvents(true);
+    emptyWindow.loadURL(pageUrl('empty'));
+    const origin = legacyWidgetOrigin || defaultTilePosition(0);
+    emptyWindow.setPosition(Math.round(origin.x - TILE_PADDING), Math.round(origin.y - TILE_PADDING));
   }
-  widgetWindow.show();
-  widgetWindow.setAlwaysOnTop(true, 'screen-saver');
+  if (!needed && emptyWindow && !emptyWindow.isDestroyed()) {
+    emptyWindow.destroy();
+    emptyWindow = null;
+  }
+  if (emptyWindow && !emptyWindow.isDestroyed()) {
+    if (tilesVisible) emptyWindow.show();
+    else emptyWindow.hide();
+  }
 }
 
-function toggleWidget() {
-  if (widgetWindow?.isVisible()) widgetWindow.hide();
-  else showWidget();
+function reconcileTiles(entries) {
+  const visible = (entries || []).filter(entry => entry && entry.visible !== false && typeof entry.url === 'string' && entry.url.trim());
+  const wanted = visible.map(entry => entry.url.trim());
+  const wantedSet = new Set(wanted);
+  for (const [key, tile] of [...tiles]) {
+    if (wantedSet.has(key)) continue;
+    if (dragController.active && dragController.state.key === key) dragController.cancel();
+    tiles.delete(key);
+    if (!tile.window.isDestroyed()) tile.window.destroy();
+  }
+  wanted.forEach((key, index) => {
+    // Tiles that already exist keep their established placement.
+    if (!layout.tiles[key]) layout.tiles[key] = defaultTilePosition(index);
+  });
+  for (const key of wanted) {
+    if (!tiles.has(key)) createTileWindow(key);
+  }
+  writeLayout();
+  updateEmptyState();
+  if (tilesVisible) showTiles();
+}
+
+function applySharedState(state) {
+  if (!state || !Array.isArray(state.entries)) return;
+  sharedStateReceived = true;
+  sharedState = { version: SHARED_STATE_VERSION, entries: state.entries };
+  writeSharedState();
+  if (!Object.keys(layout.tiles).length) migrateLegacyLayout(state.legacyPositions);
+  reconcileTiles(sharedState.entries);
 }
 
 function createTray() {
@@ -395,13 +658,13 @@ function createTray() {
   tray = new Tray(iconPath);
   tray.setToolTip('NetMeter');
   refreshTrayMenu();
-  tray.on('click', toggleWidget);
+  tray.on('click', toggleTiles);
 }
 
 function refreshTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: strings().showHideWidget, click: toggleWidget },
+    { label: strings().showHideWidget, click: toggleTiles },
     { label: strings().settings, click: showSettings },
     { id: 'pin-to-start', label: strings().pinToStart, click: () => { pinToStartMenu().catch(() => { dialog.showErrorBox(strings().pinTitle, strings().pinActionFailed); }); } },
     { type: 'separator' },
@@ -409,64 +672,148 @@ function refreshTrayMenu() {
   ]));
 }
 
+function tileKeyFor(sender) {
+  for (const [key, tile] of tiles) {
+    if (!tile.window.isDestroyed() && tile.window.webContents === sender) return key;
+  }
+  return '';
+}
+
+// The cursor is read from the Electron screen module, which reports one
+// consistent logical desktop coordinate space even when the gesture crosses a
+// display with a different scale factor.
+function cursorPoint(payload) {
+  try {
+    const point = screen.getCursorScreenPoint();
+    if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) return { x: point.x, y: point.y };
+  } catch {
+    // Fall back to the reported screen coordinates below.
+  }
+  if (payload && Number.isFinite(payload.screenX) && Number.isFinite(payload.screenY)) {
+    return { x: payload.screenX, y: payload.screenY };
+  }
+  return null;
+}
+
+function sendDragFeedback(key, payload) {
+  const tile = tiles.get(key);
+  if (!tile || tile.window.isDestroyed()) return;
+  tile.window.webContents.send('tile:drag-feedback', payload);
+}
+
+const dragController = createDragController({
+  listTiles: () => [...tiles.values()].map(tile => ({
+    key: tile.key,
+    bounds: tile.window.isDestroyed() ? { x: 0, y: 0 } : tile.window.getBounds(),
+    historyOpen: tile.historyOpen
+  })),
+  moveTile: (key, x, y) => {
+    const tile = tiles.get(key);
+    if (!tile || tile.window.isDestroyed()) return;
+    tile.window.setPosition(Math.round(x), Math.round(y));
+  },
+  cursorAt: payload => cursorPoint(payload),
+  feedback: (key, payload) => sendDragFeedback(key, payload),
+  commit: positions => persistTilePositions(positions)
+});
+
 ipcMain.on('app:language', (event, language) => {
   const next = language === 'en' ? 'en' : 'zh';
   if (next === uiLanguage) return;
   uiLanguage = next;
   refreshTrayMenu();
   if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.setTitle(strings().settingsTitle);
-  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setTitle(strings().titleWidget);
-});
-
-ipcMain.on('widget:resize', (event, payload) => {
-  if (!widgetWindow || event.sender !== widgetWindow.webContents) return;
-  if (!Number.isFinite(payload?.width) || !Number.isFinite(payload?.height)) return;
-  const width = Math.max(192, Math.min(4000, Math.round(payload.width)));
-  const height = Math.max(160, Math.min(4000, Math.round(payload.height)));
-  if (widgetCanvasInitialized && width === widgetCanvasWidth && height === widgetCanvasHeight) return;
-  widgetCanvasWidth = width;
-  widgetCanvasHeight = height;
-  widgetCanvasInitialized = true;
-  resizeWidget();
-});
-
-function resizeWidget() {
-  if (!widgetWindow || widgetWindow.isDestroyed()) return;
-  if (historyOpen) {
-    widgetWindow.setMinimumSize(380, 306);
-    widgetWindow.setContentSize(380, 306);
-    placeSettingsBesideWidget();
-    return;
+  for (const tile of tiles.values()) {
+    if (!tile.window.isDestroyed()) tile.window.setTitle(strings().titleWidget);
   }
-  const display = screen.getDisplayMatching(widgetWindow.getBounds());
-  const width = Math.min(widgetCanvasWidth, display.workAreaSize.width);
-  const height = Math.min(widgetCanvasHeight, display.workAreaSize.height);
-  widgetWindow.setMinimumSize(192, 160);
-  widgetWindow.setContentSize(width, height);
-  placeSettingsBesideWidget();
-}
+});
 
-ipcMain.on('widget:history-open', (event, open) => {
-  if (!widgetWindow || event.sender !== widgetWindow.webContents) return;
+// Every tile gear reaches the same singleton settings window.
+ipcMain.on('app:open-settings', event => {
+  const sender = event.sender;
+  const fromTile = Boolean(tileKeyFor(sender));
+  const fromSettings = Boolean(settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.webContents === sender);
+  const fromEmpty = Boolean(emptyWindow && !emptyWindow.isDestroyed() && emptyWindow.webContents === sender);
+  if (!fromTile && !fromSettings && !fromEmpty) return;
+  showSettings();
+});
+
+ipcMain.on('app:shared-state', (event, state) => {
+  const fromSettings = Boolean(settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.webContents === event.sender);
+  if (!fromSettings) return;
+  applySharedState(state);
+});
+
+ipcMain.on('tile:drag-down', (event, payload) => {
+  const key = tileKeyFor(event.sender);
+  if (!key) return;
+  dragController.pointerDown({
+    key,
+    pointerId: payload.pointerId,
+    gestureId: payload.gestureId,
+    ctrl: Boolean(payload.ctrl),
+    screenX: payload.screenX,
+    screenY: payload.screenY
+  });
+});
+
+ipcMain.on('tile:drag-modifier', (event, payload) => {
+  const key = tileKeyFor(event.sender);
+  if (!key) return;
+  dragController.modifier({ key, gestureId: payload?.gestureId, ctrl: Boolean(payload?.ctrl) });
+});
+
+ipcMain.on('tile:drag-move', (event, payload) => {
+  const key = tileKeyFor(event.sender);
+  if (!key) return;
+  dragController.pointerMove({
+    key,
+    pointerId: payload?.pointerId,
+    gestureId: payload?.gestureId,
+    ctrl: Boolean(payload?.ctrl),
+    screenX: payload?.screenX,
+    screenY: payload?.screenY
+  });
+});
+
+ipcMain.on('tile:drag-up', (event, payload) => {
+  const key = tileKeyFor(event.sender);
+  if (!key) return;
+  dragController.pointerUp({
+    key,
+    pointerId: payload?.pointerId,
+    gestureId: payload?.gestureId,
+    cancelled: Boolean(payload?.cancelled)
+  });
+});
+
+ipcMain.on('tile:history-open', (event, open) => {
+  const key = tileKeyFor(event.sender);
+  if (!key) return;
+  const tile = tiles.get(key);
+  if (!tile || tile.window.isDestroyed()) return;
   const next = Boolean(open);
-  if (next === historyOpen) return;
+  if (next === tile.historyOpen) return;
   if (next) {
-    historyOpen = true;
-    resizeWidget();
+    tile.historyBounds = tile.window.getBounds();
+    tile.historyOpen = true;
+    tile.window.setMinimumSize(HISTORY_WIDTH, HISTORY_HEIGHT);
+    tile.window.setMaximumSize(HISTORY_WIDTH, HISTORY_HEIGHT);
+    tile.window.setContentSize(HISTORY_WIDTH, HISTORY_HEIGHT);
+    applyTileInputRegion(tile);
     return;
   }
-  historyOpen = false;
-  resizeWidget();
-});
-
-ipcMain.handle('widget:position', event => {
-  if (!widgetWindow || event.sender !== widgetWindow.webContents) return null;
-  const bounds = widgetWindow.getBounds();
-  return { x: bounds.x, y: bounds.y };
+  tile.historyOpen = false;
+  applyTileInputRegion(tile);
+  tile.window.setMinimumSize(TILE_WINDOW_WIDTH, TILE_WINDOW_HEIGHT);
+  tile.window.setMaximumSize(4000, 4000);
+  tile.window.setContentSize(TILE_WINDOW_WIDTH, TILE_WINDOW_HEIGHT);
+  const restore = tile.historyBounds;
+  tile.historyBounds = null;
+  if (restore) tile.window.setPosition(restore.x, restore.y);
 });
 
 ipcMain.handle('diag:drag', async (event, payload) => {
-  if (!widgetWindow || event.sender !== widgetWindow.webContents) return false;
   if (!payload || typeof payload !== 'object') return false;
   const file = join(app.getPath('userData'), 'drag-diagnostics.jsonl');
   try {
@@ -479,49 +826,31 @@ ipcMain.handle('diag:drag', async (event, payload) => {
   return true;
 });
 
-ipcMain.on('widget:move-fast', (event, payload) => {
-  if (!widgetWindow || event.sender !== widgetWindow.webContents) return;
-  if (!Number.isFinite(payload?.x) || !Number.isFinite(payload?.y)) return;
-  const bounds = widgetWindow.getBounds();
-  const position = clampWidgetPosition(payload.x, payload.y, bounds);
-  widgetWindow.setPosition(position.x, position.y);
-});
-
-ipcMain.handle('widget:move', (event, payload) => {
-  if (!widgetWindow || event.sender !== widgetWindow.webContents) return null;
-  if (!Number.isFinite(payload?.x) || !Number.isFinite(payload?.y)) return null;
-  const bounds = widgetWindow.getBounds();
-  const position = clampWidgetPosition(payload.x, payload.y, bounds);
-  widgetWindow.setPosition(position.x, position.y);
-  return position;
-});
-
-ipcMain.on('app:open-settings', event => {
-  if (event.sender === widgetWindow?.webContents) showSettings();
-});
-
-ipcMain.on('app:settings-saved', event => {
-  if (event.sender !== settingsWindow?.webContents || !widgetWindow) return;
-  widgetWindow.webContents.reload();
-});
-
 app.whenReady().then(async () => {
   if (!ownsInstance) return;
+  screen.on('display-metrics-changed', refreshTileInputRegions);
+  screen.on('display-added', refreshTileInputRegions);
+  screen.on('display-removed', refreshTileInputRegions);
   app.setAppUserModelId(APP_ID);
   await ensureAppIcon();
   await startLocalServer(await loadControllerConfig());
-  widgetWindowState = await loadWidgetWindowState();
+  legacyWidgetOrigin = await loadLegacyWidgetOrigin();
+  layout = (await loadLayout()) || { version: LAYOUT_VERSION, tiles: {} };
+  sharedState = (await loadSharedState()) || { version: SHARED_STATE_VERSION, entries: [] };
   createTray();
-  showWidget();
-  showSettings();
+  // The settings window exists from the start so it can report the shared
+  // domain list, but it stays hidden until a gear click or the tray asks for it.
+  ensureSettingsWindow();
+  reconcileTiles(sharedState.entries);
   // Repair older shortcuts that lacked AppUserModelID; this never pins them.
   await installStartMenuShortcut();
 });
 
-app.on('activate', showWidget);
+app.on('activate', showTiles);
 
 async function finishShutdown() {
-  await saveWidgetWindowState();
+  await writeLayout();
+  await writeSharedState();
   server?.netmeterCollector?.stop();
   const closed = server?.listening
     ? new Promise(resolve => server.close(resolve))

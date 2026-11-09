@@ -38,11 +38,21 @@ function payload(now) {
 setTimeout(() => { log.push('ERROR bounded probe deadline exceeded'); flush(); app.exit(2); }, duration + 20000);
 (async () => {
   await import(pathToFileURL(join(root, 'main.mjs')).href); await app.whenReady();
+  let settings;
   for (let i = 0; i < 150; i++) {
-    win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('view=widget'));
+    settings = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('view=settings'));
+    if (settings && !settings.webContents.isLoading()) break; await pause(100);
+  }
+  if (!settings) throw Error('settings_missing');
+  // The settings window owns the shared domain list, so the tile windows are
+  // created from the report it sends to the main process.
+  await settings.webContents.executeJavaScript(`localStorage.setItem('netmeter-controller-v2', JSON.stringify({controllerEnabled:true, controllerAddress:'127.0.0.1:9097', domains:['example.com'], history:'30天',avgWindow:'5分钟'}));`);
+  settings.webContents.reload();
+  for (let i = 0; i < 150; i++) {
+    win = BrowserWindow.getAllWindows().find(w => /view=tile/.test(w.webContents.getURL()));
     if (win && !win.webContents.isLoading()) break; await pause(100);
   }
-  if (!win) throw Error('widget_missing');
+  if (!win) throw Error('tile_missing');
   base = new URL(win.webContents.getURL()).origin;
   origin = Date.now();
   upstream = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(payload(Date.now()))); });

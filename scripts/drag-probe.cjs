@@ -10,12 +10,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let win = null;
 
 function clampPosition(x, y) {
-  const workArea = screen.getDisplayNearestPoint({ x, y }).workArea;
-  const bounds = win.getBounds();
-  return {
-    x: Math.max(workArea.x - bounds.width + 80, Math.min(workArea.x + workArea.width - 80, Math.round(x))),
-    y: Math.max(workArea.y, Math.min(workArea.y + workArea.height - 40, Math.round(y)))
-  };
+  return { x: Math.round(x), y: Math.round(y) };
 }
 
 function sendJson(response, value) {
@@ -284,6 +279,7 @@ function reportFrames(name, result, hosts) {
     return { host, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys), swings: new Set(xs.map(value => String(value))).size + new Set(ys.map(value => String(value))).size - 2 };
   });
   process.stdout.write('PROBE ' + JSON.stringify({ scenario: name, frameCount: frames.length, summary, error: result.error || null, jitter: summary.some(item => item.minX !== item.maxX || item.minY !== item.maxY) }) + '\n');
+  if (result.error || summary.some(item => item.maxX - item.minX > 1 || item.maxY - item.minY > 1)) throw new Error(name + ': stationary tiles moved');
 }
 
 function movedTiles(result, hosts) {
@@ -295,6 +291,7 @@ function movedTiles(result, hosts) {
 }
 
 function report(name, result, others) {
+  if (movedTiles(result, others).some(item => item.moved)) throw new Error(name + ': stationary tiles moved');
   const start = result.before.tiles.find(item => item.host === 'alpha.test');
   const end = result.after.tiles.find(item => item.host === 'alpha.test');
   const during = result.during.tiles.find(item => item.host === 'alpha.test');
@@ -341,6 +338,13 @@ async function main() {
   ipcMain.handle('probe:position', () => {
     const bounds = win.getBounds();
     return { x: bounds.x, y: bounds.y };
+  });
+
+  ipcMain.on('probe:move-sync', (event, payload) => {
+    const before = win.getBounds();
+    win.setPosition(Math.round(payload.x), Math.round(payload.y));
+    const bounds = win.getBounds();
+    event.returnValue = { x: bounds.x, y: bounds.y, deltaX: bounds.x - before.x, deltaY: bounds.y - before.y };
   });
 
   ipcMain.handle('probe:move', (event, payload) => {
@@ -484,6 +488,40 @@ async function main() {
   log('secondary devicePixelRatio=' + dpr);
   const frameSecondary = await frameDrag('alpha.test', -180, 0, 30);
   reportFrames('frames-on-secondary-display', frameSecondary, ['bravo.test', 'charlie.test']);
+
+  const displays = screen.getAllDisplays();
+  if (displays.length > 1) {
+    const leftmost = displays.reduce((left, display) => display.bounds.x < left.bounds.x ? display : left);
+    const rightmost = displays.reduce((right, display) => display.bounds.x > right.bounds.x ? display : right);
+    await reset(seed, { x: rightmost.workArea.x + 120, y: rightmost.workArea.y + 120 });
+    const beforeCross = await snapshot();
+    const targetX = leftmost.workArea.x + Math.min(160, leftmost.workArea.width - 200);
+    const targetY = leftmost.workArea.y + 160;
+    const tile = beforeCross.tiles.find(item => item.host === 'alpha.test');
+    const fromX = tile.x + 60, fromY = tile.y + 40;
+    const crossing = await frameDrag('alpha.test', targetX - fromX, targetY - fromY, 100);
+    reportFrames('frames-crossing-display-seam', crossing, ['bravo.test', 'charlie.test']);
+    const afterCross = await snapshot();
+    const landed = afterCross.tiles.find(item => item.host === 'alpha.test');
+    if (Math.abs(landed.x - (targetX - 60)) > 2 || Math.abs(landed.y - (targetY - 40)) > 2) {
+      throw new Error('Ctrl-drag did not land on the secondary display: ' + JSON.stringify({ landed, targetX, targetY }));
+    }
+    process.stdout.write('PROBE ' + JSON.stringify({
+      scenario: 'ctrl-drag-crosses-display-boundary-in-one-gesture',
+      displays: displays.map(display => display.bounds),
+      expectedDisplay: leftmost.bounds,
+      before: beforeCross.window,
+      after: afterCross.window,
+      tile: landed,
+      expectedTile: { x: targetX - 60, y: targetY - 40 }
+    }) + '\n');
+    const returnTile = afterCross.tiles.find(item => item.host === 'alpha.test');
+    const returning = await frameDrag('alpha.test', tile.x - returnTile.x, tile.y - returnTile.y, 100);
+    reportFrames('frames-returning-across-display-seam', returning, ['bravo.test', 'charlie.test']);
+    const returned = (await snapshot()).tiles.find(item => item.host === 'alpha.test');
+    if (Math.abs(returned.x - tile.x) > 2 || Math.abs(returned.y - tile.y) > 2) throw new Error('Return Ctrl-drag missed target');
+    if (BrowserWindow.getAllWindows().some(window => window.isVisible() || window.isAlwaysOnTop())) throw new Error('Probe window became visible or topmost');
+  }
 }
 
 app.whenReady().then(main).catch(error => {

@@ -183,6 +183,13 @@
     body.widget-mode.ctrl-held .meter { cursor: move; }
     body.widget-mode.dragging .meter { cursor: grabbing; }
     body.widget-mode.window-dragging .meter { cursor: grabbing; }
+    /* One tile per native window: the tile keeps a fixed six pixel shadow
+       padding inside its own window, and the guides stay on the tile surface. */
+    body.tile-mode .meter { left: 6px; top: 6px; }
+    body.tile-mode .alignment-guide.vertical { top: 6px; bottom: 6px; }
+    body.tile-mode .alignment-guide.horizontal { left: 6px; right: 6px; }
+    body.empty-mode .meters { display: flex; align-items: center; justify-content: center; height: 100%; }
+    body.empty-mode .meter-empty { color: #b5cadf; text-align: center; }
 
     /* History is a horizontally scrollable timeline, not a fit-to-window chart. */
     .history-panel { position: relative; }
@@ -577,12 +584,22 @@
             if (key) option.textContent = t(key);
           });
         });
-        document.title = view === 'widget' ? t('app.titleWidget') : t('app.titleSettings');
+        document.title = surfaceMode ? t('app.titleWidget') : t('app.titleSettings');
       }
 
-      const view = new URLSearchParams(location.search).get('view') === 'widget' ? 'widget' : 'settings';
-      document.body.classList.add(view === 'widget' ? 'widget-mode' : 'settings-mode');
-      document.documentElement.classList.add(view === 'widget' ? 'widget-mode' : 'settings-mode');
+      const query = new URLSearchParams(location.search);
+      const requestedView = query.get('view');
+      // 'tile' is the production surface: one native window renders exactly one
+      // tile. 'widget' stays as the legacy canvas preview, 'empty' keeps the
+      // empty state reachable when every domain is hidden.
+      const view = requestedView === 'widget' || requestedView === 'tile' || requestedView === 'empty' ? requestedView : 'settings';
+      const tileKey = requestedView === 'tile' ? (query.get('key') || '').trim() : '';
+      const isTileView = view === 'tile';
+      const surfaceMode = view === 'widget' || view === 'tile' || view === 'empty';
+      document.body.classList.add(surfaceMode ? 'widget-mode' : 'settings-mode');
+      document.body.classList.toggle('tile-mode', isTileView);
+      document.body.classList.toggle('empty-mode', view === 'empty');
+      document.documentElement.classList.add(surfaceMode ? 'widget-mode' : 'settings-mode');
       language = storedLanguage();
       document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
       document.body.classList.toggle('lang-en', language === 'en');
@@ -624,14 +641,8 @@
       let renderedTheme = null;
       let meterOrder = [];
       let meterPositions = {};
-      let renderedCanvasSize = '';
-      let dragState = null;
-      let pendingDrag = null;
-      let windowDragState = null;
-      let windowScreenX = window.screenX;
-      let windowScreenY = window.screenY;
+      let tileDrag = null;
       let ctrlHeld = false;
-      let dragWatch = null;
       let suppressHistoryUntil = 0;
       let suppressClickUntil = 0;
       let savedTotals = {};
@@ -752,6 +763,7 @@
       }
 
       function targetNames() {
+        if (isTileView) return tileKey ? [tileKey] : [];
         const entries = readDomainEntries();
         const names = entries.map(entry => entry.url);
         const available = new Set(names);
@@ -926,6 +938,17 @@
         }
       }
 
+      // The settings window is the single source of truth for the shared
+      // domain list. The main process uses this report to reconcile the tile
+      // windows; every tile keeps its own established placement.
+      function reportSharedState() {
+        if (view !== 'settings') return;
+        window.netmeterDesktop?.sharedState?.({
+          entries: readDomainEntries(),
+          legacyPositions: meterPositions
+        });
+      }
+
       function restore() {
         try {
           const stored = JSON.parse(localStorage.getItem(KEY) || 'null');
@@ -1067,13 +1090,6 @@
         });
       }
 
-      function meterCanvasSize(names) {
-        if (!names.length) return { width: 192, height: 160 };
-        const right = Math.max(...names.map(name => meterPositions[name].x + 186));
-        const bottom = Math.max(...names.map(name => meterPositions[name].y + 154));
-        return { width: Math.max(192, Math.ceil(right)), height: Math.max(160, Math.ceil(bottom)) };
-      }
-
       function applyMeterPositions() {
         if (view !== 'widget') return;
         meters.querySelectorAll('.meter').forEach(meter => {
@@ -1084,89 +1100,19 @@
         });
       }
 
-      async function syncWindowPosition() {
-        const actual = await window.netmeterDesktop?.windowPosition?.();
-        if (actual && Number.isFinite(actual.x) && Number.isFinite(actual.y)) {
-          windowScreenX = actual.x;
-          windowScreenY = actual.y;
-        }
-      }
-
-      function moveWindowSync(x, y) {
-        const beforeX = window.screenX;
-        const beforeY = window.screenY;
-        const area = window.screen;
-        const minX = area.availLeft - window.outerWidth + 80;
-        const maxX = area.availLeft + area.availWidth - 80;
-        const minY = area.availTop;
-        const maxY = area.availTop + area.availHeight - 40;
-        window.moveTo(
-          Math.max(minX, Math.min(maxX, Math.round(x))),
-          Math.max(minY, Math.min(maxY, Math.round(y)))
-        );
-        windowScreenX = window.screenX;
-        windowScreenY = window.screenY;
-        return { deltaX: windowScreenX - beforeX, deltaY: windowScreenY - beforeY };
-      }
-
-      function moveWidgetWindowFast(x, y) {
-        windowScreenX = Math.round(x);
-        windowScreenY = Math.round(y);
-        window.netmeterDesktop?.moveWindowFast?.(windowScreenX, windowScreenY);
-      }
-
-      function shiftOtherMeters(name, deltaX, deltaY) {
-        if (!deltaX && !deltaY) return;
-        Object.entries(meterPositions).forEach(([key, position]) => {
-          if (key === name || !position) return;
-          position.x -= deltaX;
-          position.y -= deltaY;
-        });
-        applyMeterPositions();
-      }
-
-      function tightenMeterBounds() {
-        if (view !== 'widget' || dragState || pendingDrag || windowDragState) return;
-        const names = targetNames();
-        const positions = names.map(name => meterPositions[name]).filter(Boolean);
-        if (!positions.length) return;
-        const minX = Math.min(...positions.map(position => position.x));
-        const minY = Math.min(...positions.map(position => position.y));
-        if (minX <= 0 && minY <= 0) return;
-        const moved = moveWindowSync(window.screenX + minX, window.screenY + minY);
-        names.forEach(name => {
-          const position = meterPositions[name];
-          if (!position) return;
-          position.x -= moved.deltaX;
-          position.y -= moved.deltaY;
-        });
-        applyMeterPositions();
-        persist();
-      }
-
-      function resizeWidgetToCanvas(names) {
-        if (view !== 'widget' || dragState) return;
-        const size = meterCanvasSize(names);
-        const key = size.width + 'x' + size.height;
-        if (key === renderedCanvasSize) return;
-        renderedCanvasSize = key;
-        window.netmeterDesktop?.resizeWidget(size);
-      }
-
       function renderMeters() {
         const names = targetNames();
         ensureMeterPositions(trackedTargetNames());
         const namesKey = JSON.stringify(names);
         if (namesKey !== renderedNames || lightTheme !== renderedTheme || language !== renderedLanguage) {
-        meters.replaceChildren(...(names.length ? names.map(createMeter) : [Object.assign(document.createElement('p'), { className: 'meter-empty', textContent: t('meter.empty') })]));
+          const meterNodes = names.length ? names.map(createMeter) : [Object.assign(document.createElement('p'), { className: 'meter-empty', textContent: t('meter.empty') })];
+          meters.replaceChildren(...meterNodes, verticalAlignmentGuide, horizontalAlignmentGuide);
           meters.style.gridTemplateColumns = '';
           renderedNames = namesKey;
           renderedTheme = lightTheme;
           renderedLanguage = language;
         }
         applyMeterPositions();
-        void tightenMeterBounds();
-        resizeWidgetToCanvas(names);
         meters.querySelectorAll('.meter').forEach(meter => updateMeter(meter, getMetric(meter.dataset.host)));
         meters.querySelectorAll('.speed').forEach(element => {
           element.style.fontSize = '';
@@ -1202,7 +1148,7 @@
         meter.addEventListener('click', event => {
           if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopPropagation(); }
         }, true);
-        meter.addEventListener('pointerdown', startMeterMove);
+        meter.addEventListener('pointerdown', startTileDrag);
         return meter;
       }
 
@@ -1232,286 +1178,97 @@
         meter.querySelector('.average-up').textContent = formatRate(peakMode ? rates.peakUp : rates.up);
       }
 
-      function startMeterMove(event) {
-        if (view !== 'widget' || event.button !== 0) return;
-        const meter = event.currentTarget;
-        const position = meterPositions[meter.dataset.host];
-        if (!position) return;
-        void syncWindowPosition();
-        const rect = meter.getBoundingClientRect();
-        const container = meters.getBoundingClientRect();
-        pendingDrag = {
-          meter,
-          name: meter.dataset.host,
-          pointerId: event.pointerId,
-          single: event.ctrlKey || ctrlHeld,
-          grabOffsetX: event.clientX - rect.left,
-          grabOffsetY: event.clientY - rect.top,
-          containerLeft: container.left,
-          containerTop: container.top,
-          startClientX: event.clientX,
-          startClientY: event.clientY,
-          startScreenX: event.screenX,
-          startScreenY: event.screenY,
-          baseWindowX: windowScreenX,
-          baseWindowY: windowScreenY,
-          positions: JSON.parse(JSON.stringify(meterPositions)),
-          panX: 0,
-          panY: 0,
-          originX: position.x,
-          originY: position.y,
-          canvasWidth: Math.max(innerWidth, 760),
-          canvasHeight: Math.max(innerHeight, 560)
-        };
-      }
-
-      function beginSingleDragFromWindow(event) {
-        const gesture = windowDragState;
-        windowDragState = null;
-        document.body.classList.remove('window-dragging');
-        const meter = gesture.meter;
-        const name = meter.dataset.host;
-        const position = meterPositions[name];
-        if (!position) return;
-        const rect = meter.getBoundingClientRect();
-        const container = meters.getBoundingClientRect();
-        dragState = {
-          meter,
-          name,
-          pointerId: event.pointerId,
-          single: true,
-          grabOffsetX: event.clientX - rect.left,
-          grabOffsetY: event.clientY - rect.top,
-          containerLeft: container.left,
-          containerTop: container.top,
-          startClientX: event.clientX,
-          startClientY: event.clientY,
-          startScreenX: event.screenX,
-          startScreenY: event.screenY,
-          baseWindowX: windowScreenX,
-          baseWindowY: windowScreenY,
-          positions: JSON.parse(JSON.stringify(meterPositions)),
-          panX: 0,
-          panY: 0,
-          originX: position.x,
-          originY: position.y,
-          canvasWidth: Math.max(innerWidth, 760),
-          canvasHeight: Math.max(innerHeight, 560)
-        };
-        meter.classList.add('dragging');
-        meter.style.zIndex = '20';
-        document.body.classList.add('dragging');
-        startDragWatch(name);
-        applyMeterDrag(event);
-      }
-
-      function nearestAlignment(value, values) {
-        let best = null;
-        for (const candidate of values) {
-          const distance = Math.abs(value - candidate);
-          if (distance <= 8 && (best === null || distance < best.distance)) best = { value: candidate, distance };
-        }
-        return best?.value ?? null;
-      }
-
-      function settleMeterPosition(rawX, rawY) {
-        // 独立拖动：落点就是指针位置，邻近方格只用于对齐参考线，不得改写坐标。
-        return { x: rawX, y: rawY };
-      }
-
-      function startDragWatch(name) {
-        stopDragWatch();
-        const watch = { name, baseline: null, hits: [], raf: 0 };
-        const loop = () => {
-          if (dragWatch !== watch) return;
-          const current = new Map();
-          meters.querySelectorAll('.meter').forEach(meter => {
-            if (meter.dataset.host === name) return;
-            const rect = meter.getBoundingClientRect();
-            current.set(meter.dataset.host, { x: Math.round(window.screenX + rect.left), y: Math.round(window.screenY + rect.top) });
-          });
-          if (!watch.baseline) watch.baseline = current;
-          else current.forEach((position, host) => {
-            const base = watch.baseline.get(host);
-            if (base && (Math.abs(position.x - base.x) > 1 || Math.abs(position.y - base.y) > 1)) {
-              watch.hits.push({ host, from: base, to: position });
-            }
-          });
-          watch.raf = requestAnimationFrame(loop);
-        };
-        dragWatch = watch;
-        watch.raf = requestAnimationFrame(loop);
-      }
-
-      function stopDragWatch() {
-        if (!dragWatch) return;
-        cancelAnimationFrame(dragWatch.raf);
-        if (dragWatch.hits.length) {
-          window.netmeterDesktop?.writeDragDiagnostics?.({
-            at: new Date().toISOString(),
-            dpr: window.devicePixelRatio,
-            viewport: { width: innerWidth, height: innerHeight },
-            window: { x: window.screenX, y: window.screenY },
-            hits: dragWatch.hits.slice(0, 40)
-          });
-        }
-        dragWatch = null;
-      }
-
       function clearAlignmentGuides() {
         verticalAlignmentGuide.classList.remove('show');
         horizontalAlignmentGuide.classList.remove('show');
       }
 
-      function applyMeterDrag(event) {
-        let positionX = event.clientX - dragState.grabOffsetX - dragState.containerLeft;
-        let positionY = event.clientY - dragState.grabOffsetY - dragState.containerTop;
-        if (positionX < 0) {
-          const moved = moveWindowSync(window.screenX + positionX, window.screenY);
-          shiftOtherMeters(dragState.name, moved.deltaX, moved.deltaY);
-          positionX = 0;
+      // The tile drag path is driven by the main process: the renderer only
+      // reports pointer intent and renders the feedback. All geometry, all
+      // snapping and all native window writes live in one place.
+      function tileDragPayload(event) {
+        return {
+          pointerId: event.pointerId,
+          gestureId: tileDrag?.gestureId,
+          ctrl: Boolean(event.ctrlKey || ctrlHeld),
+          screenX: event.screenX,
+          screenY: event.screenY
+        };
+      }
+
+      function startTileDrag(event) {
+        if (!isTileView || event.button !== 0 || tileDrag) return;
+        const meter = event.currentTarget;
+        if (!meter) return;
+        tileDrag = {
+          meter,
+          pointerId: event.pointerId,
+          gestureId: window.crypto.randomUUID(),
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          started: false
+        };
+        window.netmeterDesktop?.dragDown?.(tileDragPayload(event));
+      }
+
+      function moveTileDrag(event) {
+        if (!tileDrag || event.pointerId !== tileDrag.pointerId) return;
+        if (!tileDrag.started) {
+          const deltaX = event.clientX - tileDrag.startClientX;
+          const deltaY = event.clientY - tileDrag.startClientY;
+          if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) return;
+          tileDrag.started = true;
+          tileDrag.meter?.setPointerCapture?.(tileDrag.pointerId);
+          tileDrag.meter?.classList.add('dragging');
+          document.body.classList.add('dragging');
+          suppressClickUntil = Date.now() + 500;
         }
-        if (positionY < 0) {
-          const moved = moveWindowSync(window.screenX, window.screenY + positionY);
-          shiftOtherMeters(dragState.name, moved.deltaX, moved.deltaY);
-          positionY = 0;
-        }
-        const otherPositions = targetNames().filter(name => name !== dragState.name).map(name => meterPositions[name]);
-        const wantedWidth = Math.max(positionX + 186, innerWidth, ...otherPositions.map(position => position.x + 186));
-        const wantedHeight = Math.max(positionY + 154, innerHeight, ...otherPositions.map(position => position.y + 154));
-        if (wantedWidth > dragState.canvasWidth || wantedHeight > dragState.canvasHeight) {
-          dragState.canvasWidth = wantedWidth;
-          dragState.canvasHeight = wantedHeight;
-          window.netmeterDesktop?.resizeWidget({ width: wantedWidth, height: wantedHeight });
-        }
-        const limitX = Math.max(0, dragState.canvasWidth - 186);
-        const limitY = Math.max(0, dragState.canvasHeight - 154);
-        positionX = Math.min(positionX, limitX);
-        positionY = Math.min(positionY, limitY);
-        const alignedX = nearestAlignment(positionX, otherPositions.map(position => position.x));
-        const alignedY = nearestAlignment(positionY, otherPositions.map(position => position.y));
-        if (alignedX !== null) {
-          verticalAlignmentGuide.style.left = alignedX + 'px';
+        event.preventDefault();
+        window.netmeterDesktop?.dragMove?.(tileDragPayload(event));
+      }
+
+      function endTileDrag(event, cancelled) {
+        if (!tileDrag) return;
+        if (event && Number.isFinite(event.pointerId) && event.pointerId !== tileDrag.pointerId) return;
+        const meter = tileDrag.meter;
+        const pointerId = tileDrag.pointerId;
+        const gestureId = tileDrag.gestureId;
+        const started = tileDrag.started;
+        tileDrag = null;
+        if (meter?.hasPointerCapture?.(pointerId)) meter.releasePointerCapture(pointerId);
+        meter?.classList.remove('dragging');
+        document.body.classList.remove('dragging');
+        clearAlignmentGuides();
+        window.netmeterDesktop?.dragUp?.({ pointerId, gestureId, cancelled: Boolean(cancelled) });
+        if (!started || cancelled) return;
+        suppressHistoryUntil = Date.now() + 300;
+        suppressClickUntil = Date.now() + 300;
+      }
+
+      function finishTileDrag(event) {
+        endTileDrag(event, false);
+      }
+
+      function cancelTileDrag(event) {
+        endTileDrag(event, true);
+      }
+
+      function applyDragFeedback(payload) {
+        if (!isTileView) return;
+        const guides = payload?.guides || {};
+        if (Number.isFinite(guides.x)) {
+          verticalAlignmentGuide.style.left = (6 + guides.x) + 'px';
           verticalAlignmentGuide.classList.add('show');
         } else {
           verticalAlignmentGuide.classList.remove('show');
         }
-        if (alignedY !== null) {
-          horizontalAlignmentGuide.style.top = alignedY + 'px';
+        if (Number.isFinite(guides.y)) {
+          horizontalAlignmentGuide.style.top = (6 + guides.y) + 'px';
           horizontalAlignmentGuide.classList.add('show');
         } else {
           horizontalAlignmentGuide.classList.remove('show');
         }
-        const position = { x: positionX, y: positionY };
-        meterPositions[dragState.name] = position;
-        dragState.meter.style.left = position.x + 'px';
-        dragState.meter.style.top = position.y + 'px';
-      }
-
-      function moveMeter(event) {
-        if (windowDragState && event.pointerId === windowDragState.pointerId) {
-          event.preventDefault();
-          if (windowDragState.single) {
-            beginSingleDragFromWindow(event);
-            return;
-          }
-          const x = windowDragState.windowScreenX + (event.screenX - windowDragState.pointerScreenX);
-          const y = windowDragState.windowScreenY + (event.screenY - windowDragState.pointerScreenY);
-          moveWidgetWindowFast(x, y);
-          return;
-        }
-        if (dragState) {
-          if (event.pointerId !== dragState.pointerId) return;
-          event.preventDefault();
-          applyMeterDrag(event);
-          return;
-        }
-        if (!pendingDrag || event.pointerId !== pendingDrag.pointerId) return;
-        const offsetX = event.clientX - pendingDrag.startClientX;
-        const offsetY = event.clientY - pendingDrag.startClientY;
-        if (Math.abs(offsetX) < 4 && Math.abs(offsetY) < 4) return;
-        const gesture = pendingDrag;
-        pendingDrag = null;
-        event.preventDefault();
-        gesture.meter.setPointerCapture?.(gesture.pointerId);
-        suppressClickUntil = Date.now() + 500;
-        if (gesture.single) {
-          dragState = gesture;
-          dragState.meter.classList.add('dragging');
-          dragState.meter.style.zIndex = '20';
-          startDragWatch(dragState.name);
-          document.body.classList.add('dragging');
-          window.netmeterDesktop?.resizeWidget({ width: dragState.canvasWidth, height: dragState.canvasHeight });
-          applyMeterDrag(event);
-          return;
-        }
-        windowDragState = { meter: gesture.meter, pointerId: gesture.pointerId, pointerScreenX: gesture.startScreenX, pointerScreenY: gesture.startScreenY, windowScreenX: gesture.baseWindowX, windowScreenY: gesture.baseWindowY };
-        document.body.classList.add('window-dragging');
-      }
-
-      async function finishMeterMove(event) {
-        if (windowDragState && event.pointerId === windowDragState.pointerId) {
-          if (windowDragState.meter.hasPointerCapture?.(event.pointerId)) windowDragState.meter.releasePointerCapture(event.pointerId);
-          windowDragState = null;
-          document.body.classList.remove('window-dragging');
-          return;
-        }
-        if (pendingDrag && event.pointerId === pendingDrag.pointerId) {
-          pendingDrag = null;
-          return;
-        }
-        if (!dragState || event.pointerId !== dragState.pointerId) return;
-        if (dragState.meter.hasPointerCapture?.(event.pointerId)) dragState.meter.releasePointerCapture(event.pointerId);
-        const raw = meterPositions[dragState.name];
-        const settled = settleMeterPosition(raw.x, raw.y);
-        meterPositions[dragState.name] = settled;
-        dragState.meter.style.left = settled.x + 'px';
-        dragState.meter.style.top = settled.y + 'px';
-        dragState.meter.classList.remove('dragging');
-        dragState.meter.style.zIndex = '';
-        dragState = null;
-        document.body.classList.remove('dragging');
-        clearAlignmentGuides();
-        stopDragWatch();
-        tightenMeterBounds();
-        const size = meterCanvasSize(targetNames());
-        renderedCanvasSize = size.width + 'x' + size.height;
-        window.netmeterDesktop?.resizeWidget(size);
-        persist();
-        suppressHistoryUntil = Date.now() + 300;
-        suppressClickUntil = Date.now() + 300;
-        notify(t('meter.saved'));
-      }
-
-      async function cancelMeterMove(event) {
-        if (windowDragState && event.pointerId === windowDragState.pointerId) {
-          if (windowDragState.meter.hasPointerCapture?.(event.pointerId)) windowDragState.meter.releasePointerCapture(event.pointerId);
-          windowDragState = null;
-          document.body.classList.remove('window-dragging');
-          return;
-        }
-        if (!dragState || event.pointerId !== dragState.pointerId) return;
-        const meter = dragState.meter;
-        if (meter.hasPointerCapture?.(event.pointerId)) meter.releasePointerCapture(event.pointerId);
-        meter.classList.remove('dragging');
-        meter.style.zIndex = '';
-        const snapshot = dragState.positions;
-        const baseX = dragState.baseWindowX;
-        const baseY = dragState.baseWindowY;
-        if (snapshot) {
-          Object.entries(snapshot).forEach(([name, position]) => {
-            meterPositions[name] = { x: position.x, y: position.y };
-          });
-        }
-        dragState = null;
-        applyMeterPositions();
-        moveWindowSync(baseX, baseY);
-        document.body.classList.remove('dragging');
-        clearAlignmentGuides();
-        stopDragWatch();
-        const size = meterCanvasSize(targetNames());
-        renderedCanvasSize = size.width + 'x' + size.height;
-        window.netmeterDesktop?.resizeWidget(size);
+        document.body.classList.toggle('dragging', payload?.mode === 'group' || payload?.mode === 'single');
       }
 
       function showHistory(name) {
@@ -2051,6 +1808,18 @@
         if (!response.ok) throw Error('collector_settings_failed');
       }
 
+      async function detectBackgroundCollection() {
+        try {
+          const response = await fetch('/api/status', { cache: 'no-store' });
+          if (!response.ok) return false;
+          const status = await response.json();
+          backgroundCollection = status.collector === true;
+          return backgroundCollection;
+        } catch {
+          return false;
+        }
+      }
+
       async function importLocalHistory() {
         if (!backgroundCollection || !historyDb) return;
         const samples = await new Promise(resolve => {
@@ -2142,19 +1911,18 @@
 
       async function startPolling() {
         stopPolling();
-        if (view !== 'widget') return false;
+        if (view !== 'tile' && view !== 'widget') return false;
         counters = new Map();
         lastSampleAt = 0;
-        if (settingsDirty) { setConnectionState('idle', 'status.dirty'); renderMeters(); return false; }
-        try { await syncCollectionSettings(); await importLocalHistory(); }
+        // The tile only reads the shared collector state. Configuring the
+        // collector and importing the legacy history stay in the settings
+        // window, so one shared collector and one ledger serve every tile.
+        try { await detectBackgroundCollection(); }
         catch { setConnectionState('error', 'status.configFailed', { message: 'collector_initialization_failed' }); return false; }
-        const configured = await configureBackend();
         if (backgroundCollection) {
           try { await displayCollectedTraffic(); }
           catch { setConnectionState('error', 'status.configFailed', { message: 'collector_unavailable' }); return false; }
         }
-        if (!fields.enabled.checked) { setConnectionState('disabled', 'status.disabled'); renderMeters(); return false; }
-        if (!configured) { setConnectionState('idle', fields.secret.value.trim() ? 'status.restoreFailed' : 'status.needSecret'); renderMeters(); return false; }
         setConnectionState('idle', 'status.connecting');
         pollConnections();
         pollTimer = setInterval(pollConnections, 1000);
@@ -2218,14 +1986,14 @@
         settingsDirty = false;
         lightTheme = fields.theme.checked;
         persist();
+        reportSharedState();
         pruneHistory();
         const configured = await configureBackend();
         if (configured) { fields.secret.value = ''; await syncCollectionSettings(); }
         await refreshSecretStorageState();
-        window.netmeterDesktop?.settingsSaved();
         notify(configured ? t('toast.savedKey') : t('toast.savedNoKey'));
       });
-      document.getElementById('cancelSettings').addEventListener('click', async () => { restore(); renderMeters(); await refreshSecretStorageState(); await startPolling(); notify(t('toast.restored')); });
+      document.getElementById('cancelSettings').addEventListener('click', async () => { restore(); renderMeters(); reportSharedState(); await refreshSecretStorageState(); notify(t('toast.restored')); });
       let addressVisible = true;
       let secretVisible = false;
       const addressVisibility = document.getElementById('toggleAddressVisibility');
@@ -2271,34 +2039,42 @@
           setHistoryTab(next.dataset.tab);
         });
       });
-      document.addEventListener('pointermove', moveMeter);
-      document.addEventListener('pointerup', finishMeterMove);
-      document.addEventListener('pointercancel', cancelMeterMove);
+      document.addEventListener('pointermove', moveTileDrag);
+      document.addEventListener('pointerup', finishTileDrag);
+      document.addEventListener('pointercancel', cancelTileDrag);
+      document.addEventListener('lostpointercapture', event => {
+        if (tileDrag && event.pointerId === tileDrag.pointerId) cancelTileDrag(event);
+      });
       document.addEventListener('keydown', event => {
         if (event.key === 'Control') {
           ctrlHeld = true;
           document.body.classList.add('ctrl-held');
-          if (pendingDrag) pendingDrag.single = true;
-          if (windowDragState) windowDragState.single = true;
+           if (tileDrag) window.netmeterDesktop?.dragModifier?.({ gestureId: tileDrag.gestureId, ctrl: true });
         }
         if (view === 'settings' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
           event.preventDefault();
           form.requestSubmit();
         }
-        if (event.key === 'Escape') closeHistory();
+        if (event.key === 'Escape') {
+          if (tileDrag) { cancelTileDrag(); event.preventDefault(); return; }
+          closeHistory();
+        }
       });
-      document.addEventListener('keyup', event => { if (event.key === 'Control') { ctrlHeld = false; document.body.classList.remove('ctrl-held'); if (pendingDrag) pendingDrag.single = false; if (windowDragState) windowDragState.single = false; } });
-      window.addEventListener('blur', () => { ctrlHeld = false; document.body.classList.remove('ctrl-held'); pendingDrag = null; });
+      document.addEventListener('keyup', event => { if (event.key === 'Control') { ctrlHeld = false; document.body.classList.remove('ctrl-held'); if (tileDrag) window.netmeterDesktop?.dragModifier?.({ gestureId: tileDrag.gestureId, ctrl: false }); } });
+      window.addEventListener('blur', () => { ctrlHeld = false; document.body.classList.remove('ctrl-held'); if (tileDrag) cancelTileDrag(); });
       window.addEventListener('storage', event => {
         if (event.key === LANGUAGE_KEY) {
           const next = event.newValue === 'en' ? 'en' : 'zh';
           if (next !== language) setLanguage(next);
           return;
         }
-        if (event.key !== KEY || view !== 'widget') return;
+        if (event.key !== KEY || view === 'settings') return;
         try {
           const stored = JSON.parse(event.newValue || '{}');
           renderDomainEntries(normalizeDomainEntries(stored));
+          lightTheme = Boolean(stored.lightTheme);
+          fields.theme.checked = lightTheme;
+          if (['7天', '30天', '长期'].includes(stored.history)) fields.history.value = stored.history;
           fields.avgWindow.value = Object.keys(AVERAGE_WINDOWS).includes(stored.avgWindow) ? stored.avgWindow : DEFAULT_AVERAGE_WINDOW;
           if (!historyPanel.hidden && !targetNames().includes(historyTarget)) closeHistory();
           renderMeters();
@@ -2308,11 +2084,17 @@
       fields.language.value = language;
       window.netmeterDesktop?.setLanguage?.(language);
       if (view === 'widget') normalizeMeterLayout();
-      void syncWindowPosition();
       renderMeters();
       refreshSecretStorageState();
-      if (view === 'widget') window.netmeterDesktop?.historyOpen(false);
-      openHistoryDb().then(database => { historyDb = database; pruneHistory(); if (view === 'widget') startPolling(); });
+      if (view === 'tile') window.netmeterDesktop?.historyOpen(false);
+      if (isTileView) window.netmeterDesktop?.onDragFeedback?.(applyDragFeedback);
+      reportSharedState();
+      openHistoryDb().then(database => {
+        historyDb = database;
+        pruneHistory();
+        if (view === 'tile' || view === 'widget') startPolling();
+        else if (view === 'settings') syncCollectionSettings().then(() => importLocalHistory()).catch(() => {});
+      });
     })();
   </script>
 </body>

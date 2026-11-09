@@ -4,7 +4,7 @@
 
 - Read `UI_DESIGN_SPEC.md` before changing any UI, layout, visual token, or interaction behavior.
 - Treat its dimensions, typography, colors, grid-line rules, drag behavior, history presentation, and window independence as the accepted baseline.
-- Do not replace free per-tile placement with grid ordering or whole-layout snapping. X and Y alignment are independent, with an 8px threshold and guide lines. Alignment guides are hints only: a dropped tile keeps the pointer position, and no neighbouring tile may rewrite it.
+- Preserve free per-tile placement and independent X/Y alignment. The 2026-11-09 user revision requires real proximity snapping for the dragged tile; the previous guides-only rule is superseded. Only nearby geometry may be a snap candidate, and siblings must remain unchanged throughout the gesture. Do not move a shared parent window and compensate sibling coordinates during a single-tile drag.
 - A plain left-button drag anywhere on a tile moves the whole widget with all tiles; `Ctrl`+drag moves only the tile under the pointer. Never move a single tile on a plain drag and never clamp a single-tile drag to an artificial workspace bound.
 - Keep the settings and widget windows independently visible. Opening settings must not hide the widget; overlapping windows must be arranged so both remain available.
 - Keep the settings gear in the tile header, mean/peak switching in the statistics row, and history activation limited to the domain text.
